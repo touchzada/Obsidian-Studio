@@ -425,6 +425,31 @@ function fmtCompact(n) {
   return String(num);
 }
 
+function formatMessageTime(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return {
+    iso: d.toISOString(),
+    short: d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+    full: d.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }),
+  };
+}
+
+function renderMsgTimeHtml(ts, extraClass = '') {
+  const t = formatMessageTime(ts);
+  if (!t) return '';
+  const cls = extraClass ? `msg-time mono ${extraClass}` : 'msg-time mono';
+  return `<time class="${cls}" datetime="${escapeHtml(t.iso)}" title="${escapeHtml(t.full)}">${t.short}</time>`;
+}
+
 // ── Model Family & Effort Resolution ──────────────────────────────────────────
 function resolveModelInfo(modelId) {
   const id = String(modelId || 'gemini-4-neon-xhigh');
@@ -1222,9 +1247,11 @@ function buildAssistantNode(msg, idx, isLast) {
   thoughtBody.className = 'thought-body';
   const metaRow = document.createElement('div');
   metaRow.className = 'thought-meta-grid mono';
+  const msgTime = formatMessageTime(msg.completedAt || msg.createdAt);
   metaRow.innerHTML = `
     <span>Agente: <strong>${escapeHtml(msg.agentName || state.currentSlug)}</strong></span>
     <span>Modelo: <strong>${escapeHtml(msg.model || state.activeModel)}</strong></span>
+    ${msgTime ? `<span>Horário: <strong>${escapeHtml(msgTime.full)}</strong></span>` : ''}
     ${msg.metaText ? `<span>${escapeHtml(msg.metaText)}</span>` : ''}
   `;
   thoughtBody.appendChild(metaRow);
@@ -1268,7 +1295,10 @@ function buildAssistantNode(msg, idx, isLast) {
   const footer = document.createElement('div');
   footer.className = `msg-footer ${msg.pending ? 'hidden' : ''}`;
   footer.innerHTML = `
-    <span class="mono footer-meta-span">${escapeHtml(msg.metaText || '')}</span>
+    <div class="msg-footer-meta">
+      <span class="footer-time-host">${renderMsgTimeHtml(msg.completedAt || msg.createdAt, 'msg-time-assistant')}</span>
+      <span class="mono footer-meta-span">${escapeHtml(msg.metaText || '')}</span>
+    </div>
     <div class="msg-actions">
       <button type="button" class="msg-action-btn" data-copy-msg>Copiar</button>
       ${isLast ? '<button type="button" class="msg-action-btn" data-regen-msg>↻ Regenerar</button>' : ''}
@@ -1294,6 +1324,7 @@ function buildAssistantNode(msg, idx, isLast) {
     permHost,
     contentEl,
     footer,
+    footerTimeHost: footer.querySelector('.footer-time-host'),
     footerMetaEl: footer.querySelector('.footer-meta-span'),
   };
 }
@@ -1392,11 +1423,16 @@ function updateActiveAssistantDom(msg, addedChars = 0) {
   }
 
   if (!msg.pending) {
+    const msgTime = formatMessageTime(msg.completedAt || msg.createdAt);
     dom.metaRow.innerHTML = `
       <span>Agente: <strong>${escapeHtml(msg.agentName || state.currentSlug)}</strong></span>
       <span>Modelo: <strong>${escapeHtml(msg.model || state.activeModel)}</strong></span>
+      ${msgTime ? `<span>Horário: <strong>${escapeHtml(msgTime.full)}</strong></span>` : ''}
       ${msg.metaText ? `<span>${escapeHtml(msg.metaText)}</span>` : ''}
     `;
+    if (dom.footerTimeHost) {
+      dom.footerTimeHost.innerHTML = renderMsgTimeHtml(msg.completedAt || msg.createdAt, 'msg-time-assistant');
+    }
     dom.footerMetaEl.textContent = msg.metaText || '';
     dom.footer.classList.remove('hidden');
   }
@@ -1429,7 +1465,8 @@ function renderChatMessages(animateLast = false) {
       const attHtml = msg.attachments?.length
         ? `<div class="msg-attach-row">${msg.attachments.map((a) => `<span class="attach-pill mono">📎 ${escapeHtml(a.name)}</span>`).join('')}</div>`
         : '';
-      wrapper.innerHTML = `<div class="msg-bubble">${attHtml}${escapeHtml(msg.text)}</div>`;
+      const timeHtml = renderMsgTimeHtml(msg.createdAt, 'msg-time-user');
+      wrapper.innerHTML = `<div class="msg-bubble">${attHtml}${escapeHtml(msg.text)}</div>${timeHtml}`;
     } else {
       const built = buildAssistantNode(msg, idx, isLast);
       wrapper = built.wrapper;
@@ -1634,8 +1671,12 @@ async function persistCurrentConversation() {
         messages: state.messages.map((m) => ({
           role: m.role,
           text: m.text,
+          createdAt: m.createdAt || null,
+          completedAt: m.completedAt || null,
           agentName: m.agentName,
           model: m.model,
+          thoughtText: m.thoughtText || '',
+          plan: m.plan || [],
           tools: m.tools || [],
           attachments: m.attachments || [],
           metaText: m.metaText || '',
@@ -1681,7 +1722,9 @@ function exportConversationMarkdown() {
   if (!state.messages.length) return toast('Nenhuma mensagem para exportar.', 'warn');
   const lines = [`# ${state.currentSlug} — ${state.activeModel}`, `_Exportado do Obsidian Studio em ${new Date().toLocaleString('pt-BR')}_`, ''];
   for (const m of state.messages) {
-    lines.push(m.role === 'user' ? '## Usuário' : `## ${m.agentName || state.currentSlug}`, '', m.text || '', '');
+    const t = formatMessageTime(m.completedAt || m.createdAt);
+    const stamp = t ? ` (${t.short})` : '';
+    lines.push(m.role === 'user' ? `## Usuário${stamp}` : `## ${m.agentName || state.currentSlug}${stamp}`, '', m.text || '', '');
   }
   const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
   const a = document.createElement('a');
@@ -2531,11 +2574,14 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
   prism?.notifyMascot('send', {});
 
   const startedAt = Date.now();
-  state.messages.push({ role: 'user', text: rawContent, attachments });
+  const startedIso = new Date(startedAt).toISOString();
+  state.messages.push({ role: 'user', text: rawContent, attachments, createdAt: startedIso });
   const assistantMsg = {
     role: 'assistant',
     agentName: state.currentSlug,
     model: state.activeModel,
+    createdAt: startedIso,
+    completedAt: null,
     text: '',
     thoughtText: '',
     plan: [],
@@ -2610,6 +2656,7 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
   } finally {
     if (state.thinkingTimer) { clearInterval(state.thinkingTimer); state.thinkingTimer = 0; }
     assistantMsg.pending = false;
+    assistantMsg.completedAt = new Date().toISOString();
     assistantMsg.durationSec = assistantMsg.durationSec || (Date.now() - startedAt) / 1000;
     state.abortController = null;
     setStreamingUI(false);

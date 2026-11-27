@@ -1192,7 +1192,7 @@ html[data-ag-pp-open="1"] .ag-cs-crab {
   gap: 8px;
 }
 
-.msg-user { align-items: flex-end; }
+.msg-user { align-items: flex-end; gap: 4px; }
 .msg-user .msg-bubble {
   max-width: 80%;
   padding: 10px 16px;
@@ -1205,6 +1205,47 @@ html[data-ag-pp-open="1"] .ag-cs-crab {
   word-break: break-word;
   font-size: 14.5px;
   line-height: 1.62;
+}
+
+.msg-time {
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.msg-time-user {
+  padding-right: 6px;
+  opacity: 0.58;
+  transition: opacity 160ms ease;
+}
+
+.msg-user:hover .msg-time-user {
+  opacity: 0.92;
+}
+
+.msg-footer-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.msg-footer-meta .footer-time-host:empty {
+  display: none;
+}
+
+.msg-time-assistant {
+  color: var(--secondary-foreground);
+  opacity: 0.85;
+}
+
+.msg-footer-meta .footer-time-host:not(:empty) + .footer-meta-span:not(:empty)::before {
+  content: "·";
+  margin-right: 8px;
+  opacity: 0.55;
 }
 
 .msg-attach-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
