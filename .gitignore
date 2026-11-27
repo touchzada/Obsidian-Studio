@@ -1,0 +1,12 @@
+# Local runtime data (conversations, API keys/profiles, uploads, telemetry, prompt history)
+data/
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+node_modules/
+.env
+.env.*

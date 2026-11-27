@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html
+  lang="pt-BR"
+  data-ag-cs-style="1"
+  data-ag-cs-palette="obsidian"
+  data-ag-cs-light-preset="crystal"
+  data-ag-cs-theme="dark"
+  data-ag-cs-accent="follow"
+  data-ag-cs-ambient="1"
+  data-ag-cs-motion="ultra"
+  data-ag-cs-composer="on"
+  data-ag-cs-dark-aura-style="neon"
+  data-ag-cs-dark-aura="balanced"
+  data-palette="obsidian"
+  data-theme="dark"
+>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Obsidian Studio — Neon 4 Extra High</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="obsidian-shell">
+    <!-- Left Sidebar (Authentic Obsidian Prism) -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="brand-row">
+          <div class="brand-lockup">
+            <span class="prism-logo-slot" id="brandLogoSlot" aria-hidden="true"></span>
+            <div class="brand-titles">
+              <span class="brand-name">Obsidian Studio</span>
+              <span class="brand-sub mono">NEON 4 · XHIGH</span>
+            </div>
+          </div>
+          <button id="collapseSidebarBtn" class="icon-mini-btn" title="Recolher barra lateral" type="button">◧</button>
+        </div>
+
+        <div class="mode-switch" role="tablist">
+          <div class="mode-glide" id="modeGlide"></div>
+          <button class="mode-pill active" id="viewStudioBtn" type="button" title="Editor de System Prompt + Chat">
+            ✦ Studio
+          </button>
+          <button class="mode-pill" id="viewChatBtn" type="button" title="Modo Chat em foco total">
+            ◉ Chat
+          </button>
+        </div>
+
+        <button class="btn-new-chat" id="sidebarNewChatBtn" type="button">
+          <span>＋ Nova conversa</span>
+          <span class="kbd-hint mono">Ctrl+K</span>
+        </button>
+      </div>
+
+      <div class="sidebar-search">
+        <input id="convSearchInput" class="search-input" type="search" placeholder="Filtrar conversas…" />
+      </div>
+
+      <div class="sidebar-section-label">
+        <span>Conversas salvas</span>
+        <span id="convCountBadge" class="mono">0</span>
+      </div>
+
+      <div class="conv-list" id="convList">
+        <div class="conv-empty">Suas conversas aparecerão aqui.</div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="sidebar-footer-btn" id="openAccountsBtn" type="button">
+          <span>◉ Contas Antigravity</span>
+          <span class="mono footer-tag" id="accountTag">Google</span>
+        </button>
+        <button class="sidebar-footer-btn" id="openAppearanceBtn" type="button">
+          <span>✦ Aparência &amp; Pets</span>
+          <span class="mono footer-tag" id="paletteTag">Obsidian · 4</span>
+        </button>
+        <button class="sidebar-footer-btn" id="exportConvBtn" type="button">
+          <span>↓ Exportar conversa (.md)</span>
+        </button>
+        <a class="sidebar-credit mono" href="https://github.com/touchzada/Obsidian-Studio" target="_blank" rel="noopener noreferrer" title="Obsidian Studio por Luciano Gomes (@touchzada)">
+          <span>Obsidian Studio</span>
+          <span>by @touchzada ↗</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- Main Stage -->
+    <div class="main-stage">
+      <header class="stage-header">
+        <div class="header-left">
+          <button id="expandSidebarBtn" class="opt-btn hidden" title="Mostrar barra lateral" type="button">◧</button>
+
+          <!-- Custom Optical Agent Picker Trigger -->
+          <div class="popover-anchor">
+            <button id="agentTriggerBtn" class="opt-btn agent-trigger" type="button">
+              <span class="agent-dot"></span>
+              <span id="agentTriggerLabel">neon-agent</span>
+              <span class="chevron">▾</span>
+            </button>
+            <div class="glass-popover agent-popover hidden" id="agentPopover">
+              <div class="popover-search-wrap">
+                <input type="search" id="agentSearchInput" class="search-input" placeholder="Buscar agente…" />
+              </div>
+              <div class="popover-list" id="agentPopoverList"></div>
+              <div class="popover-footer">
+                <button type="button" class="popover-action-btn" id="popoverNewAgentBtn">＋ Criar novo agente nativo</button>
+              </div>
+            </div>
+          </div>
+
+          <span id="sessionStatusChip" class="status-chip">Pronto</span>
+          <button type="button" id="staleChip" class="status-chip stale hidden" title="Clique para iniciar nova sessão com o prompt salvo">
+            Prompt alterado · Aplicar
+          </button>
+        </div>
+
+        <div class="header-right">
+          <button id="headerAccountBtn" class="opt-btn account-pill-btn" title="Trocar conta ou perfil de autenticação do Antigravity" type="button">
+            <span class="acct-pill-dot"></span>
+            <span id="headerAccountLabel">Google</span>
+          </button>
+          <button id="copyCliBtn" class="opt-btn mono" title="Copiar comando agy CLI" type="button">agy CLI</button>
+          <button id="toggleEditorBtn" class="opt-btn active" title="Mostrar/ocultar editor de System Prompt" type="button">System Prompt</button>
+        </div>
+      </header>
+
+      <div class="stage-body">
+        <!-- Left Editor Pane: System Prompt -->
+        <section class="editor-pane" id="editorPane">
+          <div class="pane-subbar">
+            <div class="pane-heading">
+              <span>System Prompt</span>
+              <span id="dirtyBadge" class="pill-tag pill-warn hidden">Não salvo</span>
+              <span id="savedBadge" class="pill-tag pill-ok hidden">Salvo</span>
+            </div>
+
+            <div class="pane-controls">
+              <!-- Custom Templates Popover -->
+              <div class="popover-anchor">
+                <button type="button" class="opt-btn opt-btn-xs" id="templateTriggerBtn">Templates ▾</button>
+                <div class="glass-popover mini-popover hidden" id="templatePopover"></div>
+              </div>
+
+              <!-- Custom Prompt History Popover -->
+              <div class="popover-anchor">
+                <button type="button" class="opt-btn opt-btn-xs" id="historyTriggerBtn">Histórico ▾</button>
+                <div class="glass-popover mini-popover hidden" id="historyPopover"></div>
+              </div>
+
+              <button id="toggleConfigBtn" class="opt-btn opt-btn-xs" type="button">Config</button>
+            </div>
+          </div>
+
+          <div class="path-strip">
+            <span class="mono truncate" id="agentFilePath">~/.gemini/config/agents/neon-agent/agent.md</span>
+            <button id="deleteAgentBtn" class="link-danger hidden" type="button">Excluir</button>
+          </div>
+
+          <div class="config-drawer hidden" id="configDrawer">
+            <div class="field-group">
+              <label for="agentDescInput">Descrição (frontmatter YAML)</label>
+              <input type="text" id="agentDescInput" class="obsidian-input" placeholder="Descrição do papel deste agente" />
+            </div>
+            <div class="field-group">
+              <label for="cwdInput">Pasta de trabalho (cwd do agente)</label>
+              <input type="text" id="cwdInput" class="obsidian-input mono" />
+            </div>
+            <div class="field-group">
+              <label>Ferramentas ativas no agent.md</label>
+              <div class="tool-grid" id="toolToggles"></div>
+            </div>
+          </div>
+
+          <div class="prompt-editor-box">
+            <textarea
+              id="systemPromptEditor"
+              class="prompt-textarea mono"
+              spellcheck="false"
+              placeholder="Escreva o System Prompt do seu agente... (Ctrl+S salva direto no agent.md)"
+            ></textarea>
+          </div>
+
+          <div class="editor-footer">
+            <span class="stats-text mono" id="editorStats">0L · 0 chars · ~0 tok</span>
+            <div class="footer-btns">
+              <button id="savePromptBtn" class="btn btn-ghost" title="Salvar no agent.md (Ctrl+S)" type="button">Salvar</button>
+              <button id="saveRestartBtn" class="btn btn-prism" title="Salvar e aplicar em nova sessão" type="button">Salvar e Aplicar</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="resizer" id="resizer"></div>
+
+        <!-- Right Chat / Studio Seat (Hosts REAL Obsidian Prism WebGL2 Ripple & Neon Horizon Glow) -->
+        <section class="chat-seat agy-home" id="chatSeat" data-main-content-body="1">
+          <div class="chat-scroll" id="chatMessages"></div>
+
+          <!-- Composer Dock -->
+          <div class="composer-dock">
+            <div class="composer-stage" id="composerStage">
+              <!-- Slash Commands Popover -->
+              <div class="glass-popover slash-menu hidden" id="slashMenu"></div>
+
+              <!-- Custom Obsidian Prism Model Picker + Starfield Effort Slider / Cut-Crystal Bar -->
+              <div class="glass-popover model-popover hidden" id="modelPopover">
+                <div class="model-popover-head">
+                  <span>Selecionar modelo</span>
+                  <span class="mono" style="font-size:10.5px; color:var(--muted-foreground);">512K CONTEXT</span>
+                </div>
+
+                <div class="model-family-list" id="modelFamilyList"></div>
+
+                <!-- Orchestrator Planner Sub-selector (visible only when Orchestrator selected) -->
+                <div class="orch-planner-row hidden" id="orchPlannerRow">
+                  <span class="effort-label">Planejador</span>
+                  <div class="orch-pills" id="orchPlannerPills">
+                    <button type="button" class="orch-pill" data-orch="gemini-pro-orchestrator-neon">Neon</button>
+                    <button type="button" class="orch-pill" data-orch="gemini-pro-orchestrator">Carbon</button>
+                    <button type="button" class="orch-pill" data-orch="gemini-pro-orchestrator-argon">Argon</button>
+                  </div>
+                </div>
+
+                <!-- REAL Obsidian Prism Effort Slider (vendor/effort-slider/upstream-client.js → mountCodexEffortSlider) -->
+                <div class="effort-panel ces-ag-section" id="effortPanel">
+                  <div class="ces-ag-effort-row text-foreground" id="effortRow" data-ces-effort-row="true">
+                    <div class="ces-ag-effort-head">
+                      <span class="ces-ag-effort-title">Nível de raciocínio</span>
+                      <span class="ces-ag-effort-value" id="effortValueLabel" data-ces-part="value" data-tier="xhigh">Extra</span>
+                    </div>
+                    <div class="ces-inline" id="effortSliderHost" data-ces-part="host"></div>
+                  </div>
+
+                  <!-- Real WebGL2 Cut-Crystal Prism Bar (Orchestrator Auto mode — exact Obsidian Prism structure) -->
+                  <div class="hidden" id="crystalSliderWrap" data-testid="orchestrator-effort-bar">
+                    <div class="ag-cs-orch-head">
+                      <span class="ces-ag-effort-title">Nível de raciocínio</span>
+                      <span class="ag-cs-orch-value">Auto</span>
+                    </div>
+                    <div class="ag-cs-orch-track" id="crystalTrack">
+                      <canvas id="crystalBarCanvas" class="ag-cs-orch-canvas" data-orch-crystal-canvas="true" aria-hidden="true"></canvas>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Custom Permissions Popover -->
+              <div class="glass-popover mode-popover hidden" id="modePopover">
+                <button type="button" class="mode-opt" data-mode="full">
+                  <span class="mode-dot" style="background:var(--success);"></span>
+                  <span class="mode-opt-text">
+                    <strong>Completo</strong>
+                    <small>Arquivos, busca, terminal e web sem pausa</small>
+                  </span>
+                </button>
+                <button type="button" class="mode-opt" data-mode="accept-edits">
+                  <span class="mode-dot" style="background:var(--primary);"></span>
+                  <span class="mode-opt-text">
+                    <strong>Editar arquivos</strong>
+                    <small>Aprova leitura e edição de arquivos</small>
+                  </span>
+                </button>
+                <button type="button" class="mode-opt" data-mode="plan">
+                  <span class="mode-dot" style="background:var(--warning);"></span>
+                  <span class="mode-opt-text">
+                    <strong>Somente leitura</strong>
+                    <small>Analisa e planeja sem modificar nada</small>
+                  </span>
+                </button>
+              </div>
+
+              <!-- REAL 512K Physical Water Vial Telemetry Popover (Modeled 1:1 on optics.webp) -->
+              <div class="glass-popover vial-popover hidden" id="vialPopover">
+                <aside class="vial-rail">
+                  <div class="vial-rail-head mono">
+                    <span>512K</span>
+                    <strong id="vialPctLabel">0.4%</strong>
+                  </div>
+                  <div class="vial-slot" id="vialDragHandle" title="Arraste ou clique no líquido para agitar!">
+                    <canvas id="vialCanvas" width="96" height="220" style="width:96px;height:220px;"></canvas>
+                  </div>
+                  <div class="vial-rail-foot mono" id="vialStateLabel">IDLE</div>
+                </aside>
+
+                <div class="vial-details">
+                  <div class="vial-verify-card">
+                    <div class="vial-verify-top">
+                      <span>Amostragem real do modelo</span>
+                      <span class="verified-pill">VERIFIED</span>
+                    </div>
+                    <div class="vial-model-route mono" id="vialModelRoute">Gemini 4 Neon → gemini-4-neon-xhigh</div>
+                    <div class="vial-speed-row mono">
+                      <span id="vialTtft">TTFT —</span>
+                      <span id="vialTps">TPS —</span>
+                    </div>
+                  </div>
+
+                  <div class="vial-ctx-block">
+                    <div class="vial-ctx-head mono">
+                      <span>Espectro de Contexto</span>
+                      <span id="vialUsedSummary">0 / 512k</span>
+                    </div>
+                    <!-- 3-Segment Interactive Context Bar (Hover highlights liquid optics!) -->
+                    <div class="pv-minibar" id="vialMiniBar">
+                      <span class="pv-seg seg-sys" data-slice="0" id="segSys" style="width:4%;"></span>
+                      <span class="pv-seg seg-conv" data-slice="1" id="segConv" style="width:1%;"></span>
+                      <span class="pv-seg seg-think" data-slice="2" id="segThink" style="width:1%;"></span>
+                      <i class="pv-thresh" title="85% alerta de compactação"></i>
+                    </div>
+
+                    <div class="vial-rows mono">
+                      <div class="vial-row" data-slice-row="0">
+                        <span><i class="vial-dot" style="background:#5CC6FC;"></i>System Prompt</span>
+                        <span id="vialSysTok">~0</span>
+                      </div>
+                      <div class="vial-row" data-slice-row="1">
+                        <span><i class="vial-dot" style="background:#669DF6;"></i>Conversa (Input)</span>
+                        <span id="vialInTok">0</span>
+                      </div>
+                      <div class="vial-row" data-slice-row="2">
+                        <span><i class="vial-dot" style="background:#A58AF8;"></i>Raciocínio (Think)</span>
+                        <span id="vialThinkTok">0</span>
+                      </div>
+                      <div class="vial-row">
+                        <span><i class="vial-dot" style="background:#50A37B;"></i>Cache Hit</span>
+                        <span id="vialCacheTok">0%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="vial-footer-row">
+                    <span class="mono" style="font-size:11px; color:var(--muted-foreground);" id="vialTotalSaved">0 turnos totais</span>
+                    <button type="button" class="opt-btn opt-btn-xs" id="vialResetBtn">Nova sessão</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Queued Messages Card (Obsidian Prism style — sits right above composer; pets leap onto it!) -->
+              <div class="queued-messages-card hidden" id="queuedMessagesCard">
+                <div class="queued-head" id="queuedHead">
+                  <div class="queued-head-left">
+                    <span class="queued-title">Mensagens na fila</span>
+                    <span class="queued-count-badge mono" id="queuedCountBadge">0</span>
+                    <span class="queued-subtitle" id="queuedSubtitle">Envia quando o agente terminar</span>
+                  </div>
+                  <button type="button" class="queued-toggle-btn" id="queuedToggleBtn" title="Recolher / expandir fila" aria-expanded="true">
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                  </button>
+                </div>
+                <div class="queued-list" id="queuedList"></div>
+              </div>
+
+              <!-- REAL Obsidian Prism Composer Card (data-ag-cs-prism-box="1" activates real 300Hz GPU prism-rim-canvas!) -->
+              <div class="surface-composer-card" id="composerCard" data-ag-cs-prism-box="1" data-testid="agent-input-box">
+                <!-- REAL Obsidian Prism Dual / Quad Mascot Stage (Whale + Dragon + Clawd + Cat) -->
+                <div class="ag-cs-crab ag-cs-dual-stage" id="mascotStage" data-mascot-stage="true" aria-hidden="true"></div>
+
+                <div class="pending-attachments hidden" id="pendingAttachments"></div>
+
+                <!-- Contenteditable Composer Host for REAL Obsidian Prism Smooth Gliding Caret -->
+                <div class="chat-input-host" id="chatInputHost">
+                  <div
+                    id="chatInput"
+                    class="chat-input"
+                    contenteditable="true"
+                    role="textbox"
+                    aria-multiline="true"
+                    spellcheck="true"
+                    data-empty="1"
+                    data-placeholder="Descreva o que quer construir… (/ comandos, arraste arquivos ou Enter)"
+                  ></div>
+                </div>
+
+                <div class="composer-bar">
+                  <div class="composer-bar-left">
+                    <input type="file" id="fileInput" multiple class="hidden" />
+                    <button type="button" id="attachBtn" class="circle-btn" title="Anexar arquivos ou imagens">＋</button>
+
+                    <!-- Custom Model Trigger Pill (Zero native <select>!) -->
+                    <button type="button" class="composer-pill" id="modelTriggerBtn" title="Escolher modelo e nível de raciocínio">
+                      <span class="model-glyph" id="modelTriggerGlyph"></span>
+                      <span id="modelTriggerName">Gemini 4 Neon</span>
+                      <span class="effort-tag mono" id="effortBadge" data-tier="xhigh">EXTRA</span>
+                      <span class="chevron">▾</span>
+                    </button>
+
+                    <!-- Custom Permissions Trigger Pill -->
+                    <button type="button" class="composer-pill" id="modeTriggerBtn" title="Modo de permissões do agente">
+                      <span class="mode-dot" id="modeTriggerDot" style="background:var(--success);"></span>
+                      <span id="modeTriggerLabel">Completo</span>
+                      <span class="chevron">▾</span>
+                    </button>
+                  </div>
+
+                  <div class="composer-bar-right">
+                    <!-- Authentic Obsidian Prism Inline Telemetry Strip -->
+                    <button type="button" class="telemetry-strip mono" id="telemetryTrigger" title="Abrir 512K Physical Water Vial">
+                      <span class="t-tps" id="liveTpsLabel">— tok/s</span>
+                      <span class="t-sep">·</span>
+                      <span class="t-cache" id="liveCacheLabel">Cache —</span>
+                      <span class="t-sep t-sep-ring">·</span>
+                      <span class="t-ctx-wrap">
+                        <svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true">
+                          <circle class="ctx-ring-bg" cx="10" cy="10" r="7.4" />
+                          <circle class="ctx-ring-fg" id="ctxRingFg" cx="10" cy="10" r="7.4" stroke-dasharray="46.5" stroke-dashoffset="45" />
+                        </svg>
+                        <span id="liveCtxPct">0%</span>
+                      </span>
+                    </button>
+
+                    <!-- While streaming + text typed: Queue (Enter) or Steer/Send Now (Ctrl+Enter) -->
+                    <button type="button" id="queueAddBtn" class="queue-action-pill hidden" title="Deixar na fila (Enter)">
+                      <span>＋ Fila</span>
+                    </button>
+                    <button type="button" id="sendNowBtn" class="queue-steer-btn hidden" title="Interromper turno atual e enviar agora (Ctrl+Enter)">
+                      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+                    </button>
+
+                    <!-- Spinning Prismatic Orbit Stop Button -->
+                    <button type="button" id="stopBtn" class="stop-orbit-btn hidden" data-testid="input-cancel-button" title="Parar geração">
+                      <span class="stop-sq"></span>
+                    </button>
+                    <button type="button" id="sendBtn" class="send-circle-btn" data-testid="send-button" title="Enviar (Enter)">↑</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create New Agent Modal -->
+  <div class="modal-backdrop hidden" id="newAgentModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Novo Agente Nativo do Antigravity</h3>
+        <button id="closeNewAgentBtn" class="icon-mini-btn" type="button">✕</button>
+      </div>
+      <form id="newAgentForm" class="modal-body">
+        <div class="field-group">
+          <label for="newAgentName">Nome do agente (slug)</label>
+          <input type="text" id="newAgentName" class="obsidian-input mono" placeholder="ex: arquiteto-neon" required />
+        </div>
+        <div class="field-group">
+          <label for="newAgentDesc">Descrição</label>
+          <input type="text" id="newAgentDesc" class="obsidian-input" placeholder="Ex: Especialista em engenharia e arquitetura" />
+        </div>
+        <div class="field-group">
+          <label for="newAgentPrompt">System Prompt inicial</label>
+          <textarea id="newAgentPrompt" class="obsidian-input mono" rows="6"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="cancelNewAgentBtn" class="btn btn-ghost">Cancelar</button>
+          <button type="submit" class="btn btn-prism">Criar Agente</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Appearance & Pets Modal (Obsidian Prism Preferences) -->
+  <div class="modal-backdrop hidden" id="appearanceModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>✦ Aparência &amp; Pets · Obsidian Prism</h3>
+        <button id="closeAppearanceBtn" class="icon-mini-btn" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-group">
+          <label>Paleta de Superfície</label>
+          <div class="swatch-grid" id="paletteSwatches">
+            <button type="button" class="swatch-card" data-palette="obsidian">
+              <div class="swatch-preview" style="background:linear-gradient(135deg,#09090B 45%,#181C28 100%);"></div>
+              <span>Obsidian</span>
+            </button>
+            <button type="button" class="swatch-card" data-palette="warm">
+              <div class="swatch-preview" style="background:linear-gradient(135deg,#10100F 45%,#2B241E 100%);"></div>
+              <span>Warm</span>
+            </button>
+            <button type="button" class="swatch-card" data-palette="crystal">
+              <div class="swatch-preview" style="background:linear-gradient(135deg,#E8EEF6 45%,#FFFFFF 100%);"></div>
+              <span>Crystal</span>
+            </button>
+            <button type="button" class="swatch-card" data-palette="alabaster">
+              <div class="swatch-preview" style="background:linear-gradient(135deg,#EBE6DC 45%,#FAF8F2 100%);"></div>
+              <span>Alabaster</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label>Cor de Destaque (Acento Óptico)</label>
+          <div class="option-pills" id="accentPills">
+            <button type="button" class="opt-pill" data-accent="follow">Prism (Follow)</button>
+            <button type="button" class="opt-pill" data-accent="cobalt">Cobalt</button>
+            <button type="button" class="opt-pill" data-accent="iris">Iris</button>
+            <button type="button" class="opt-pill" data-accent="amber">Amber</button>
+            <button type="button" class="opt-pill" data-accent="mono">Mono</button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label>Pets no Composer (Whale · Dragon · Clawd · Cat)</label>
+          <div class="option-pills" id="petModePills">
+            <button type="button" class="opt-pill" data-pet-mode="quad">4 pets</button>
+            <button type="button" class="opt-pill" data-pet-mode="crab">2 pets</button>
+            <button type="button" class="opt-pill" data-pet-mode="off">Nenhum</button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label>Intensidade de Luz Ambiente &amp; Ripple</label>
+          <div class="option-pills" id="auraPills">
+            <button type="button" class="opt-pill" data-aura="1">100% (Ultra)</button>
+            <button type="button" class="opt-pill" data-aura="0.55">55% (Suave)</button>
+            <button type="button" class="opt-pill" data-aura="0">0% (Desligado)</button>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" id="doneAppearanceBtn" class="btn btn-prism">Concluir</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Accounts / Auth Switcher Modal -->
+  <div class="modal-backdrop hidden" id="accountsModal">
+    <div class="modal-card accounts-card">
+      <div class="modal-header">
+        <h3>◉ Contas &amp; Autenticação · Antigravity</h3>
+        <button id="closeAccountsBtn" class="icon-mini-btn" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="acct-hint">
+          Escolha qual credencial o Studio usa para rodar o <span class="mono">agy</span>. A troca vale na próxima mensagem
+          (a sessão atual é reiniciada). Métodos oficiais: login Google, Gemini API key e Google Cloud ADC.
+        </div>
+
+        <div class="acct-list" id="accountsList"></div>
+
+        <div class="acct-google-box">
+          <div>
+            <strong>Trocar a conta Google logada</strong>
+            <small>Abre o terminal oficial do <span class="mono">agy</span>: digite <span class="mono">/logout</span> e faça login com a outra conta no navegador. O contexto do chat atual é preservado automaticamente.</small>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; flex-shrink:0;">
+            <button type="button" class="btn btn-ghost" id="reconnectAccountBtn" title="Reinicia o processo do agy na nova conta levando todo o histórico deste chat">↻ Reconectar mantendo contexto</button>
+            <button type="button" class="btn btn-ghost" id="googleSwitchBtn">Trocar conta Google ↗</button>
+          </div>
+        </div>
+
+        <details class="acct-add" id="acctAddDetails">
+          <summary>＋ Adicionar perfil</summary>
+          <div class="option-pills" id="acctTypePills">
+            <button type="button" class="opt-pill active" data-acct-type="apikey">Gemini API key</button>
+            <button type="button" class="opt-pill" data-acct-type="adc">Google Cloud (ADC)</button>
+          </div>
+          <div class="field-group">
+            <label for="acctName">Nome do perfil</label>
+            <input type="text" id="acctName" class="obsidian-input" placeholder="ex: Conta trabalho" maxlength="60" />
+          </div>
+          <div class="field-group" data-acct-field="apikey">
+            <label for="acctKey">Gemini API key (AI Studio)</label>
+            <input type="password" id="acctKey" class="obsidian-input mono" placeholder="AIza..." autocomplete="off" />
+            <label for="acctBaseUrl" style="margin-top:8px;">Endpoint customizado (opcional — GOOGLE_GEMINI_BASE_URL)</label>
+            <input type="url" id="acctBaseUrl" class="obsidian-input mono" placeholder="https://..." autocomplete="off" />
+          </div>
+          <div class="field-group hidden" data-acct-field="adc">
+            <label for="acctProject">Projeto GCP (quota project)</label>
+            <input type="text" id="acctProject" class="obsidian-input mono" placeholder="meu-projeto-123" />
+            <label for="acctLocation" style="margin-top:8px;">Location (opcional)</label>
+            <input type="text" id="acctLocation" class="obsidian-input mono" placeholder="global / us / eu" />
+            <small class="acct-small">Antes rode: <span class="mono">gcloud auth application-default login --project SEU_PROJETO</span></small>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-prism" id="acctSaveBtn">Salvar perfil</button>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- REAL Obsidian Prism Engines loaded directly from local plugin -->
+  <script src="/prism-vendor/brand-mark-svg.js"></script>
+  <script src="/prism-vendor/motion-engine.js"></script>
+  <script src="/prism-vendor/ripple-core.js"></script>
+  <script src="/prism-vendor/home-ripple-host.js"></script>
+  <script src="/prism-vendor/conv-aura.js"></script>
+  <script src="/prism-vendor/smooth-caret.js"></script>
+  <script src="/prism-vendor/prism-rim-canvas.js"></script>
+  <script src="/prism-vendor/dual-mascot-rig.js"></script>
+  <script src="/prism-vendor/vial-core.js"></script>
+  <script src="/prism-vendor/crystal-prism-core.js"></script>
+  <script>window.__agCodexEffortSliderDisableAutoBoot = true;</script>
+  <script src="/prism-vendor/effort-slider.js"></script>
+
+  <!-- Studio Runtime -->
+  <script src="/prism-bridge.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

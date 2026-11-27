@@ -1,0 +1,17 @@
+{
+  "name": "obsidian-studio",
+  "version": "1.0.0",
+  "description": "Obsidian Studio — Optical local web studio for Google Antigravity CLI (Gemini 4 Neon Extra High), live System Prompt editing, queued messages, 512K telemetry, and multi-account context carryover.",
+  "author": "Luciano Gomes (@touchzada)",
+  "homepage": "https://touchzada.github.io/Obsidian-Studio/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/touchzada/Obsidian-Studio.git"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
