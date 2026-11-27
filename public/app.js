@@ -320,6 +320,16 @@ const el = {
   btwBody: document.getElementById('btwBody'),
   btwCopyBtn: document.getElementById('btwCopyBtn'),
   btwCloseBtn: document.getElementById('btwCloseBtn'),
+  goalLiveBar: document.getElementById('goalLiveBar'),
+  goalBeacon: document.getElementById('goalBeacon'),
+  goalBadge: document.getElementById('goalBadge'),
+  goalTimerLabel: document.getElementById('goalTimerLabel'),
+  goalObjLabel: document.getElementById('goalObjLabel'),
+  goalExtendBtn: document.getElementById('goalExtendBtn'),
+  goalPauseBtn: document.getElementById('goalPauseBtn'),
+  goalStopBtn: document.getElementById('goalStopBtn'),
+  goalProgressTrack: document.getElementById('goalProgressTrack'),
+  goalProgressFill: document.getElementById('goalProgressFill'),
   helpModal: document.getElementById('helpModal'),
   closeHelpBtn: document.getElementById('closeHelpBtn'),
   voiceMicBtn: document.getElementById('voiceMicBtn'),
@@ -846,9 +856,11 @@ function syncMascotsNow() {
   const info = resolveModelInfo(state.activeModel);
   const qVis = el.queuedMessagesCard && !el.queuedMessagesCard.classList.contains('hidden');
   const bVis = el.btwCard && !el.btwCard.classList.contains('hidden');
+  const gVis = el.goalLiveBar && !el.goalLiveBar.classList.contains('hidden');
   let stackH = 0;
   if (qVis) stackH += (el.queuedMessagesCard.offsetHeight || 0) + 8;
   if (bVis) stackH += (el.btwCard.offsetHeight || 0) + 8;
+  if (gVis) stackH += (el.goalLiveBar.offsetHeight || 0) + 8;
   const leapY = stackH > 0 ? Math.max(44, stackH) : 0;
   prism?.syncMascots({
     camp: info.camp,
@@ -1692,6 +1704,7 @@ async function persistCurrentConversation() {
 }
 
 async function openSavedConversation(convId) {
+  if (goalState.active) stopGoalLoop({ notify: false });
   if (state.streaming) await abortCurrentTurn();
   await closeCurrentSession();
   try {
@@ -1886,6 +1899,7 @@ async function closeCurrentSession() {
 }
 
 async function startFreshSession({ clearMessages = true, preserveContext = false } = {}) {
+  if (clearMessages && goalState.active) stopGoalLoop({ notify: false });
   if (state.streaming) await abortCurrentTurn();
   await closeCurrentSession();
   if (clearMessages) {
@@ -2415,8 +2429,44 @@ function executeSlashCommand(raw) {
     return true;
   }
 
+  // Live `/goal` control subcommands (work even while streaming!)
+  if (name === 'goal') {
+    const low = arg.toLowerCase();
+    if (!arg) {
+      setChatInputText('/goal ');
+      el.chatInput.focus();
+      toast('Ex: /goal 30m refatore e teste tudo  ou  /goal até 18:00 melhorar UI', 'warn');
+      return true;
+    }
+    if (['stop', 'cancel', 'off', 'parar', 'encerrar'].includes(low)) {
+      if (goalState.active) stopGoalLoop({ notify: true, reason: '🎯 Goal encerrado manualmente.' });
+      else toast('Nenhum /goal ativo no momento.', 'warn');
+      return true;
+    }
+    if (['pause', 'pausar'].includes(low)) {
+      if (goalState.active) pauseGoalLoop('Pausado via /goal pause');
+      else toast('Nenhum /goal ativo para pausar.', 'warn');
+      return true;
+    }
+    if (['resume', 'retomar', 'continue', 'continuar'].includes(low)) {
+      if (goalState.active) resumeGoalLoop();
+      else toast('Nenhum /goal pausado para retomar.', 'warn');
+      return true;
+    }
+    const extMatch = low.match(/^\+\s*(\d+(?:[.,]\d+)?)\s*(h|hr|hrs|horas?|m|min|mins|minutos?|s|seg|segs|segundos?)$/);
+    if (extMatch) {
+      const val = parseFloat(extMatch[1].replace(',', '.'));
+      const unit = extMatch[2];
+      const mult = unit.startsWith('h') ? 3600000 : unit.startsWith('m') ? 60000 : 1000;
+      if (goalState.active && val > 0) {
+        extendGoalTime(Math.round(val * mult));
+        return true;
+      }
+    }
+  }
+
   // Commands that require an argument to be sent as an enriched ACP turn
-  if ((name === 'goal' || name === 'boost') && !arg) {
+  if (name === 'boost' && !arg) {
     setChatInputText(`/${name} `);
     el.chatInput.focus();
     toast(`Digite o objetivo após /${name}`, 'warn');
@@ -2426,22 +2476,386 @@ function executeSlashCommand(raw) {
   return false;
 }
 
-// Transform `/goal <objective>` and `/boost <task>` into enriched ACP autonomous/deep instructions
-async function expandPromptSlashWorkflow(rawContent) {
+// ── Autonomous `/goal` & Timed-Execution Loop Engine ──────────────────────────
+const goalState = {
+  active: false,
+  paused: false,
+  mode: 'until-done', // 'timed' | 'until-done'
+  objective: '',
+  startedAt: 0,
+  deadlineAt: 0,
+  durationMs: 0,
+  iteration: 0,
+  maxIterations: 40,
+  consecutiveErrors: 0,
+  timerId: 0,
+  nextCycleTimeout: 0,
+};
+
+function fmtClockHms(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function fmtDurationHuman(ms) {
+  const totalMin = Math.max(1, Math.round(ms / 60000));
+  if (ms < 60000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h > 0 && m > 0) return `${h}h${String(m).padStart(2, '0')}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
+function parseTimeDirective(text) {
+  const src = String(text || '');
+  const now = Date.now();
+
+  // 1. Explicit clock target: "até 18:00", "até às 17h30", "until 18:30"
+  const untilRe = /\b(?:at[eé](?:\s+[aà]s)?|until)\s+(\d{1,2})(?::(\d{2})|h(\d{2})?)\b/i;
+  const untilM = src.match(untilRe);
+  if (untilM) {
+    const hh = parseInt(untilM[1], 10);
+    const mm = parseInt(untilM[2] ?? untilM[3] ?? '0', 10);
+    if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) {
+      const target = new Date(now);
+      target.setHours(hh, mm, 0, 0);
+      if (target.getTime() <= now + 10000) target.setDate(target.getDate() + 1);
+      const durationMs = target.getTime() - now;
+      if (durationMs >= 15000 && durationMs <= 24 * 3600000) {
+        const hhmm = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+        return { durationMs, deadlineAt: target.getTime(), label: `até ${hhmm}` };
+      }
+    }
+  }
+
+  // 2. Leading flag / shorthand inside /goal: "--for 30m", "1h30m", "45min", "2h"
+  const leadCompoundRe = /^(?:--for\s+)?(\d+)\s*h(?:oras?|rs?)?\s*(?:e\s*)?(\d+)\s*m(?:in(?:utos?)?)?\b/i;
+  const lcM = src.trim().match(leadCompoundRe);
+  if (lcM) {
+    const durationMs = (parseInt(lcM[1], 10) * 60 + parseInt(lcM[2], 10)) * 60000;
+    if (durationMs >= 15000 && durationMs <= 24 * 3600000) {
+      return {
+        durationMs,
+        deadlineAt: now + durationMs,
+        label: fmtDurationHuman(durationMs),
+        stripped: src.trim().slice(lcM[0].length).trim(),
+      };
+    }
+  }
+  const leadSingleRe = /^(?:--for\s+)?(\d+(?:[.,]\d+)?)\s*(horas?|hrs?|h|minutos?|mins?|min|m|segundos?|segs?|s)\b/i;
+  const lsM = src.trim().match(leadSingleRe);
+  if (lsM) {
+    const val = parseFloat(lsM[1].replace(',', '.'));
+    const unit = lsM[2].toLowerCase();
+    const mult = unit.startsWith('h') ? 3600000 : unit.startsWith('m') ? 60000 : 1000;
+    const durationMs = Math.round(val * mult);
+    if (durationMs >= 15000 && durationMs <= 24 * 3600000) {
+      return {
+        durationMs,
+        deadlineAt: now + durationMs,
+        label: fmtDurationHuman(durationMs),
+        stripped: src.trim().slice(lsM[0].length).trim(),
+      };
+    }
+  }
+
+  // 3. Compound duration anywhere: "por 1 hora e 30 minutos", "durante 1h30", "for 1h 20m"
+  const anyCompoundRe = /\b(?:por|durante|pelos?\s+pr[oó]ximos?|for)\s+(\d+)\s*h(?:oras?|rs?)?\s*(?:e\s*)?(\d+)\s*(?:m(?:in(?:utos?)?)?)?\b/i;
+  const acM = src.match(anyCompoundRe);
+  if (acM) {
+    const durationMs = (parseInt(acM[1], 10) * 60 + parseInt(acM[2], 10)) * 60000;
+    if (durationMs >= 15000 && durationMs <= 24 * 3600000) {
+      return { durationMs, deadlineAt: now + durationMs, label: fmtDurationHuman(durationMs) };
+    }
+  }
+
+  // 4. Natural PT-BR / EN duration anywhere: "por 30 minutos", "durante 2 horas", "for 45 min"
+  const anySingleRe = /\b(?:por|durante|pelos?\s+pr[oó]ximos?|for)\s+(\d+(?:[.,]\d+)?)\s*(horas?|hrs?|h|minutos?|mins?|min|m|segundos?|segs?|s)\b/i;
+  const asM = src.match(anySingleRe);
+  if (asM) {
+    const val = parseFloat(asM[1].replace(',', '.'));
+    const unit = asM[2].toLowerCase();
+    const mult = unit.startsWith('h') ? 3600000 : unit.startsWith('m') ? 60000 : 1000;
+    const durationMs = Math.round(val * mult);
+    if (durationMs >= 15000 && durationMs <= 24 * 3600000) {
+      return { durationMs, deadlineAt: now + durationMs, label: fmtDurationHuman(durationMs) };
+    }
+  }
+
+  return null;
+}
+
+const TIMED_ORDER_VERB_RE = /\b(continu[ae]|continuar|trabalh[ae]|trabalhar|rod[ae]|rodar|execut[ae]|executar|segu[ei]|sig[ae]|seguir|fic[ae]|fique|ficar|mant[eé]m|mantenha|manter|prossig[ae]|prossegu[ei]|iter[ae]|iterar|melhor[ae]|melhorar|otimiz[ae]|otimizar|test[ae]|testar|audit[ae]|auditar|refator[ae]|refatorar|keep\s+going|keep\s+working|work|run|continue)\b/i;
+
+function renderGoalHud() {
+  if (!el.goalLiveBar) return;
+  if (!goalState.active) {
+    el.goalLiveBar.classList.add('hidden');
+    el.goalLiveBar.classList.remove('paused');
+    requestAnimationFrame(() => syncMascotsNow());
+    return;
+  }
+
+  const wasHidden = el.goalLiveBar.classList.contains('hidden');
+  el.goalLiveBar.classList.remove('hidden');
+  el.goalLiveBar.classList.toggle('paused', goalState.paused);
+
+  const now = Date.now();
+  const elapsedMs = Math.max(0, now - goalState.startedAt);
+  if (el.goalBadge) {
+    el.goalBadge.textContent = goalState.paused
+      ? `⏸ GOAL PAUSADO · Ciclo #${goalState.iteration}`
+      : `🎯 GOAL · Ciclo #${goalState.iteration}`;
+  }
+  if (el.goalObjLabel) {
+    el.goalObjLabel.textContent = goalState.objective;
+    el.goalObjLabel.title = goalState.objective;
+  }
+  if (el.goalPauseBtn) {
+    el.goalPauseBtn.textContent = goalState.paused ? '▶ Retomar' : '⏸ Pausar';
+  }
+
+  if (goalState.mode === 'timed' && goalState.deadlineAt > 0) {
+    const remMs = Math.max(0, goalState.deadlineAt - now);
+    const endStr = new Date(goalState.deadlineAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const pct = goalState.durationMs > 0 ? Math.min(100, Math.max(2, (elapsedMs / goalState.durationMs) * 100)) : 0;
+    if (el.goalTimerLabel) {
+      el.goalTimerLabel.textContent = remMs > 0
+        ? `Restam ${fmtClockHms(remMs)} (até ${endStr})`
+        : `Tempo atingido (${endStr})`;
+    }
+    el.goalProgressTrack?.classList.remove('hidden');
+    if (el.goalProgressFill) el.goalProgressFill.style.width = `${pct.toFixed(1)}%`;
+  } else {
+    if (el.goalTimerLabel) {
+      el.goalTimerLabel.textContent = `${fmtClockHms(elapsedMs)} · até verificar [GOAL_COMPLETE]`;
+    }
+    el.goalProgressTrack?.classList.add('hidden');
+  }
+
+  if (wasHidden) {
+    prism?.animatePopoverIn(el.goalLiveBar);
+    requestAnimationFrame(() => {
+      syncMascotsNow();
+      prism?.markRimDirty?.();
+    });
+  }
+}
+
+function startGoalLoop({ objective, durationMs = 0, deadlineAt = 0 }) {
+  if (goalState.nextCycleTimeout) { clearTimeout(goalState.nextCycleTimeout); goalState.nextCycleTimeout = 0; }
+  if (goalState.timerId) { clearInterval(goalState.timerId); goalState.timerId = 0; }
+
+  const now = Date.now();
+  goalState.active = true;
+  goalState.paused = false;
+  goalState.objective = String(objective || '').trim() || 'Continuar trabalhando no objetivo atual';
+  goalState.startedAt = now;
+  goalState.durationMs = durationMs > 0 ? durationMs : 0;
+  goalState.deadlineAt = durationMs > 0 ? (deadlineAt || now + durationMs) : 0;
+  goalState.mode = durationMs > 0 ? 'timed' : 'until-done';
+  goalState.iteration = 1;
+  goalState.maxIterations = durationMs > 0 ? 180 : 40;
+  goalState.consecutiveErrors = 0;
+
+  goalState.timerId = setInterval(() => {
+    if (!goalState.active) { clearInterval(goalState.timerId); goalState.timerId = 0; return; }
+    renderGoalHud();
+  }, 1000);
+  renderGoalHud();
+}
+
+function pauseGoalLoop(reason = '') {
+  if (!goalState.active) return;
+  goalState.paused = true;
+  if (goalState.nextCycleTimeout) { clearTimeout(goalState.nextCycleTimeout); goalState.nextCycleTimeout = 0; }
+  renderGoalHud();
+  if (reason) toast(reason, 'warn');
+}
+
+function resumeGoalLoop() {
+  if (!goalState.active) return;
+  goalState.paused = false;
+  goalState.consecutiveErrors = 0;
+  if (goalState.mode === 'until-done' && goalState.iteration >= goalState.maxIterations) {
+    goalState.maxIterations += 20;
+  }
+  renderGoalHud();
+  toast('▶ Goal retomado — continuando ciclos autônomos!', 'ok');
+  if (!state.streaming) {
+    scheduleNextGoalCycle(250);
+  }
+}
+
+function extendGoalTime(extraMs = 15 * 60 * 1000) {
+  if (!goalState.active) return;
+  const now = Date.now();
+  if (goalState.mode === 'timed' && goalState.deadlineAt > now) {
+    goalState.deadlineAt += extraMs;
+    goalState.durationMs += extraMs;
+  } else {
+    goalState.mode = 'timed';
+    goalState.startedAt = now;
+    goalState.durationMs = extraMs;
+    goalState.deadlineAt = now + extraMs;
+    goalState.maxIterations = Math.max(goalState.maxIterations, 180);
+  }
+  renderGoalHud();
+  toast(`⏱️ Goal estendido em +${fmtDurationHuman(extraMs)}!`, 'ok');
+  if (goalState.paused && !state.streaming) resumeGoalLoop();
+}
+
+function stopGoalLoop({ notify = true, reason = '🎯 Loop /goal encerrado.', completed = false } = {}) {
+  if (goalState.nextCycleTimeout) { clearTimeout(goalState.nextCycleTimeout); goalState.nextCycleTimeout = 0; }
+  if (goalState.timerId) { clearInterval(goalState.timerId); goalState.timerId = 0; }
+  goalState.active = false;
+  goalState.paused = false;
+  goalState.deadlineAt = 0;
+  goalState.durationMs = 0;
+  renderGoalHud();
+  if (notify) toast(reason, completed ? 'ok' : 'warn');
+}
+
+function buildGoalInitialPrompt(objective, timeInfo) {
+  const nowStr = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (timeInfo && timeInfo.durationMs > 0) {
+    const endStr = new Date(timeInfo.deadlineAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    return (
+      `[MODO /goal AUTÔNOMO COM TEMPO CONTÍNUO — CICLO #1]\n` +
+      `Horário atual: ${nowStr} · Trabalhar continuamente até: ${endStr} (${timeInfo.label})\n` +
+      `Objetivo do usuário: ${objective}\n\n` +
+      `REGRAS OBRIGATÓRIAS DESTE LOOP AUTÔNOMO (controlado pelo Obsidian Studio):\n` +
+      `1. Trabalhe com autonomia total e ritmo real (editando arquivos, rodando comandos, testando, verificando e refinando) — NÃO pare pedindo permissão nem faça perguntas desnecessárias.\n` +
+      `2. NÃO encerre cedo: se concluir a primeira passada antes de ${endStr}, o Studio enviará ciclos automáticos de continuação para você aprofundar testes, corrigir edge cases, revisar performance/UX e evoluir a solução até completar o tempo pedido.\n` +
+      `3. Em cada ciclo, execute passos concretos verificáveis e entregue um resumo objetivo do que foi feito e do próximo passo.\n` +
+      `4. Só emita a linha exata [GOAL_BLOCKED: motivo] se houver um bloqueio externo real impossível de resolver sozinho.\n`
+    );
+  }
+  return (
+    `[MODO /goal — EXECUÇÃO AUTÔNOMA EM LOOP ATÉ VERIFICAÇÃO 100% COMPLETA (CICLO #1)]\n` +
+    `Horário atual: ${nowStr}\n` +
+    `Objetivo final: ${objective}\n\n` +
+    `REGRAS OBRIGATÓRIAS DO MODO /goal (loop controlado pelo Obsidian Studio):\n` +
+    `1. Trabalhe de ponta a ponta sem parar no meio nem pedir confirmações desnecessárias.\n` +
+    `2. Rode testes, builds e verificações reais após cada mudança; se algo falhar, diagnostique e corrija antes de concluir.\n` +
+    `3. O Obsidian Studio continuará automaticamente chamando você em ciclos consecutivos até que você comprove objetivamente que 100% do objetivo foi concluído e escreva na última linha exatamente: [GOAL_COMPLETE]\n` +
+    `4. NUNCA escreva [GOAL_COMPLETE] se ainda houver etapas, testes ou correções pendentes. Se houver um bloqueio externo real impossível de contornar, escreva exatamente: [GOAL_BLOCKED: motivo]\n`
+  );
+}
+
+function buildGoalContinuationPrompt() {
+  const now = Date.now();
+  const nowStr = new Date(now).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const elapsedStr = fmtClockHms(now - goalState.startedAt);
+
+  if (goalState.mode === 'timed' && goalState.deadlineAt > 0) {
+    const remMs = Math.max(0, goalState.deadlineAt - now);
+    const endStr = new Date(goalState.deadlineAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    return (
+      `[CONTINUAÇÃO AUTOMÁTICA DO /goal — CICLO #${goalState.iteration}]\n` +
+      `Horário atual: ${nowStr} · Decorrido: ${elapsedStr} · RESTAM: ${fmtClockHms(remMs)} (alvo: ${endStr})\n` +
+      `Objetivo original: ${goalState.objective}\n\n` +
+      `O tempo solicitado pelo usuário AINDA NÃO ACABOU (restam ${fmtClockHms(remMs)}).\n` +
+      `NÃO pare, NÃO repita o que já disse e NÃO peça permissão para continuar.\n` +
+      `Execute agora o próximo avanço concreto: verifique o estado real dos arquivos/testes, corrija falhas ou edge cases, melhore qualidade/robustez/UI ou avance para a próxima sub-entrega relevante do objetivo.\n` +
+      `Se houver bloqueio externo real impossível de resolver, escreva [GOAL_BLOCKED: motivo].`
+    );
+  }
+
+  return (
+    `[CONTINUAÇÃO AUTOMÁTICA DO /goal — CICLO #${goalState.iteration}/${goalState.maxIterations}]\n` +
+    `Horário atual: ${nowStr} · Decorrido: ${elapsedStr}\n` +
+    `Objetivo original: ${goalState.objective}\n\n` +
+    `Você encerrou o turno anterior SEM emitir [GOAL_COMPLETE]. Continue executando autonomamente de onde parou — NÃO pare para perguntar se deve prosseguir.\n` +
+    `Complete os passos pendentes, rode verificações/testes reais e só então, quando tudo estiver 100% comprovado, finalize escrevendo na última linha exatamente: [GOAL_COMPLETE]\n` +
+    `(Se houver um bloqueio externo impossível de contornar, escreva: [GOAL_BLOCKED: motivo])`
+  );
+}
+
+async function scheduleNextGoalCycle(delayMs = 1800) {
+  if (!goalState.active || goalState.paused) return;
+  if (goalState.nextCycleTimeout) clearTimeout(goalState.nextCycleTimeout);
+
+  goalState.nextCycleTimeout = setTimeout(async () => {
+    goalState.nextCycleTimeout = 0;
+    if (!goalState.active || goalState.paused || state.streaming) return;
+
+    if (goalState.mode === 'timed' && goalState.deadlineAt > 0 && Date.now() >= goalState.deadlineAt) {
+      stopGoalLoop({ notify: true, completed: true, reason: '⏱️ Tempo do Goal concluído!' });
+      return;
+    }
+
+    // Auto-compact context before next cycle if usage crosses 80% so multi-hour runs never overflow!
+    const ctxMax = state.contextSize || 512000;
+    const usedTok = Number(state.lastUsage?.input_tokens || 0) + Number(state.lastUsage?.output_tokens || 0);
+    if (usedTok > 0 && usedTok / ctxMax >= 0.80) {
+      await closeCurrentSession();
+      state.agyConversationId = null;
+      state.needsContextSeed = true;
+      toast('♻️ Contexto >80% — compactação automática aplicada para o próximo ciclo do Goal.', 'ok');
+    }
+
+    goalState.iteration += 1;
+    renderGoalHud();
+
+    const remLabel = goalState.mode === 'timed' && goalState.deadlineAt > 0
+      ? ` · restam ${fmtClockHms(Math.max(0, goalState.deadlineAt - Date.now()))}`
+      : '';
+    const displayLabel = `🎯 [Ciclo #${goalState.iteration}${remLabel}] Continuando autonomamente…`;
+    const contPrompt = buildGoalContinuationPrompt();
+    sendMessage(contPrompt, [], { isGoalContinuation: true, displayText: displayLabel });
+  }, delayMs);
+}
+
+// Transform `/goal <objective>`, natural timed orders, and `/boost <task>` into enriched ACP instructions
+async function expandPromptSlashWorkflow(rawContent, opts = {}) {
+  if (opts.isGoalContinuation) {
+    return {
+      displayText: opts.displayText || `🎯 [Ciclo #${goalState.iteration}] Continuando…`,
+      workflowTag: 'GOAL_CONT',
+      promptText: rawContent,
+    };
+  }
+
   const goalMatch = rawContent.match(/^\/goal\s+([\s\S]+)$/i);
   if (goalMatch) {
-    const objective = goalMatch[1].trim();
+    const rawArg = goalMatch[1].trim();
+    const timeInfo = parseTimeDirective(rawArg);
+    const objective = (timeInfo?.stripped || rawArg).trim() || rawArg;
+    startGoalLoop({
+      objective,
+      durationMs: timeInfo?.durationMs || 0,
+      deadlineAt: timeInfo?.deadlineAt || 0,
+    });
     return {
       displayText: rawContent,
       workflowTag: 'GOAL',
-      promptText:
-        `[MODO /goal — EXECUÇÃO AUTÔNOMA ATÉ VERIFICAÇÃO COMPLETA]\n` +
-        `Objetivo final: ${objective}\n\n` +
-        `Diretrizes obrigatórias do modo /goal:\n` +
-        `1. Trabalhe de ponta a ponta até o objetivo estar 100% concluído e verificado (não pare no meio pedindo confirmações desnecessárias).\n` +
-        `2. Rode testes, builds e verificações reais após cada alteração; se algo falhar, diagnostique e corrija antes de concluir.\n` +
-        `3. Só finalize quando puder comprovar objetivamente que todos os critérios do objetivo foram atendidos (ou relate claramente um bloqueio externo real).\n`,
+      timeLabel: timeInfo?.label || '',
+      promptText: buildGoalInitialPrompt(objective, timeInfo),
     };
+  }
+
+  // Natural-language timed order even without `/goal` (ex: "continua por 30 minutos melhorando tudo", "trabalhe até 18:00")
+  if (!rawContent.startsWith('/') && TIMED_ORDER_VERB_RE.test(rawContent)) {
+    const timeInfo = parseTimeDirective(rawContent);
+    if (timeInfo && timeInfo.durationMs >= 15000) {
+      startGoalLoop({
+        objective: rawContent,
+        durationMs: timeInfo.durationMs,
+        deadlineAt: timeInfo.deadlineAt,
+      });
+      return {
+        displayText: rawContent,
+        workflowTag: 'GOAL',
+        timeLabel: timeInfo.label,
+        promptText: buildGoalInitialPrompt(rawContent, timeInfo),
+      };
+    }
   }
 
   const boostMatch = rawContent.match(/^\/boost\s+([\s\S]+)$/i);
@@ -2509,12 +2923,12 @@ function updateSlashMenu() {
   }
 }
 
-async function sendMessage(overrideText = null, overrideAttachments = null) {
+async function sendMessage(overrideText = null, overrideAttachments = null, sendOpts = {}) {
   const rawContent = overrideText !== null ? overrideText : getChatInputText().trim();
   if (!rawContent) return;
 
-  // Immediate local/parallel commands (like `/btw`, `/copy`, `/help`, `/model`, `/skills`) work even while streaming!
-  if (rawContent.startsWith('/') && executeSlashCommand(rawContent)) {
+  // Immediate local/parallel commands (like `/btw`, `/copy`, `/help`, `/model`, `/skills`, `/goal stop`) work even while streaming!
+  if (!sendOpts.isGoalContinuation && rawContent.startsWith('/') && executeSlashCommand(rawContent)) {
     el.slashMenu.classList.add('hidden');
     if (overrideText === null) { setChatInputText(''); syncComposerActionButtons(); }
     return;
@@ -2533,7 +2947,7 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
     if (!ok) return;
   }
 
-  const expanded = await expandPromptSlashWorkflow(rawContent);
+  const expanded = await expandPromptSlashWorkflow(rawContent, sendOpts);
 
   let sessionId;
   try { sessionId = await ensureSession(); }
@@ -2564,7 +2978,12 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
     payloadContent = `${contextSeed}\n\n[NOVA MENSAGEM DO USUÁRIO]\n${payloadContent}`;
   }
   if (expanded.workflowTag === 'GOAL') {
-    toast('🎯 Modo /goal ativo — executando autonomamente até verificar conclusão.', 'ok');
+    toast(
+      expanded.timeLabel
+        ? `🎯 Loop autônomo /goal ativado (${expanded.timeLabel}) — o Studio mantém o agente rodando até completar o tempo!`
+        : '🎯 Loop autônomo /goal ativado — rodando ciclos consecutivos até [GOAL_COMPLETE]!',
+      'ok'
+    );
   } else if (expanded.workflowTag === 'BOOST') {
     toast('⚡ Modo /boost ativo — raciocínio profundo (Extra High).', 'ok');
   }
@@ -2575,7 +2994,7 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
 
   const startedAt = Date.now();
   const startedIso = new Date(startedAt).toISOString();
-  state.messages.push({ role: 'user', text: rawContent, attachments, createdAt: startedIso });
+  state.messages.push({ role: 'user', text: expanded.displayText || rawContent, attachments, createdAt: startedIso });
   const assistantMsg = {
     role: 'assistant',
     agentName: state.currentSlug,
@@ -2689,10 +3108,53 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
       const next = state.steeringNext;
       state.steeringNext = null;
       setTimeout(() => sendMessage(next.text, next.attachments || []), 70);
-    } else if (!wasManualAbort && !assistantMsg.error && state.queuedMessages.length > 0) {
+    } else if (wasManualAbort) {
+      if (goalState.active && !goalState.paused) {
+        pauseGoalLoop('⏸ Goal pausado ao parar o turno — clique em ▶ Retomar ou ■ Encerrar.');
+      }
+    } else if (assistantMsg.error) {
+      if (goalState.active && !goalState.paused) {
+        if (AUTH_OR_QUOTA_ERR_RE.test(String(assistantMsg.text || ''))) {
+          pauseGoalLoop('⏸ Goal pausado por cota/autenticação — troque a conta e clique em ▶ Retomar.');
+        } else {
+          goalState.consecutiveErrors += 1;
+          if (goalState.consecutiveErrors < 3) {
+            toast(`Erro transitório no ciclo #${goalState.iteration} — tentando retomar em 5s…`, 'warn');
+            scheduleNextGoalCycle(5000);
+          } else {
+            pauseGoalLoop('⏸ Goal pausado após 3 erros consecutivos.');
+          }
+        }
+      }
+    } else if (state.queuedMessages.length > 0) {
       const next = state.queuedMessages.shift();
       renderQueuedMessages();
       setTimeout(() => sendMessage(next.text, next.attachments || []), 120);
+    } else if (goalState.active && !goalState.paused) {
+      goalState.consecutiveErrors = 0;
+      const respText = String(assistantMsg.text || '');
+      const blockedMatch = respText.match(/\[GOAL_BLOCKED(?::\s*([^\]]+))?\]/i);
+      if (blockedMatch) {
+        const why = blockedMatch[1]?.trim() || 'bloqueio externo relatado pelo agente';
+        stopGoalLoop({ notify: true, completed: false, reason: `⚠️ Goal bloqueado: ${why}` });
+      } else if (goalState.mode === 'timed' && goalState.deadlineAt > 0) {
+        const remMs = goalState.deadlineAt - Date.now();
+        if (remMs <= 0) {
+          stopGoalLoop({ notify: true, completed: true, reason: `⏱️ Goal concluído — tempo total cumprido (${goalState.iteration} ciclos)!` });
+        } else {
+          const turnSec = (Date.now() - startedAt) / 1000;
+          scheduleNextGoalCycle(turnSec < 5 ? 4500 : 1800);
+        }
+      } else {
+        if (/\[GOAL_COMPLETE\]/i.test(respText)) {
+          stopGoalLoop({ notify: true, completed: true, reason: `🎯 Goal concluído e verificado em ${goalState.iteration} ciclo${goalState.iteration > 1 ? 's' : ''}!` });
+        } else if (goalState.iteration >= goalState.maxIterations) {
+          pauseGoalLoop(`⏸ Limite de ${goalState.maxIterations} ciclos atingido — clique em ▶ Retomar (+20) ou ■ Encerrar.`);
+        } else {
+          const turnSec = (Date.now() - startedAt) / 1000;
+          scheduleNextGoalCycle(turnSec < 5 ? 4500 : 1800);
+        }
+      }
     }
   }
 }
@@ -3141,6 +3603,17 @@ function bindEvents() {
   el.queuedHead?.addEventListener('click', () => {
     state.queueCollapsed = !state.queueCollapsed;
     renderQueuedMessages();
+  });
+
+  // Autonomous `/goal` HUD controls
+  el.goalExtendBtn?.addEventListener('click', () => extendGoalTime(15 * 60 * 1000));
+  el.goalPauseBtn?.addEventListener('click', () => {
+    if (goalState.paused) resumeGoalLoop();
+    else pauseGoalLoop('⏸ Goal pausado — o turno atual termina e o próximo ciclo fica em espera.');
+  });
+  el.goalStopBtn?.addEventListener('click', async () => {
+    stopGoalLoop({ notify: true, reason: '🎯 Goal encerrado.' });
+    if (state.streaming) await abortCurrentTurn({ isSteer: false });
   });
 
   // New Agent Modal

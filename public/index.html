@@ -381,6 +381,26 @@
                 <div class="btw-body md" id="btwBody"></div>
               </div>
 
+              <!-- Autonomous `/goal` & Timed Execution Loop Live HUD (Pets leap onto it!) -->
+              <div class="goal-live-bar hidden" id="goalLiveBar">
+                <div class="goal-live-top">
+                  <div class="goal-live-left">
+                    <span class="goal-beacon" id="goalBeacon"></span>
+                    <span class="goal-badge mono" id="goalBadge">🎯 GOAL · Ciclo #1</span>
+                    <span class="goal-timer mono" id="goalTimerLabel">00:00</span>
+                    <span class="goal-obj" id="goalObjLabel"></span>
+                  </div>
+                  <div class="goal-live-actions">
+                    <button type="button" class="opt-btn opt-btn-xs" id="goalExtendBtn" title="Adicionar +15 minutos ao tempo">+15m</button>
+                    <button type="button" class="opt-btn opt-btn-xs" id="goalPauseBtn" title="Pausar / retomar loop autônomo">⏸ Pausar</button>
+                    <button type="button" class="opt-btn opt-btn-xs goal-stop-btn" id="goalStopBtn" title="Encerrar loop autônomo">■ Encerrar</button>
+                  </div>
+                </div>
+                <div class="goal-progress-track hidden" id="goalProgressTrack">
+                  <div class="goal-progress-fill" id="goalProgressFill" style="width: 0%;"></div>
+                </div>
+              </div>
+
               <!-- Queued Messages Card (Obsidian Prism style — sits right above composer; pets leap onto it!) -->
               <div class="queued-messages-card hidden" id="queuedMessagesCard">
                 <div class="queued-head" id="queuedHead">
@@ -675,7 +695,8 @@
       <div class="modal-body help-grid">
         <div class="help-col">
           <div class="help-sec-title mono">RACIOCÍNIO &amp; FLUXO</div>
-          <div class="help-row"><code class="mono">/goal &lt;objetivo&gt;</code><span>Modo autônomo até verificar conclusão total</span></div>
+          <div class="help-row"><code class="mono">/goal [30m] &lt;objetivo&gt;</code><span>Loop autônomo contínuo até concluir ou cumprir tempo (ex: 30m, 2h, até 18:00)</span></div>
+          <div class="help-row"><code class="mono">/goal stop|pause|+15m</code><span>Controla ou estende o loop /goal ativo ao vivo</span></div>
           <div class="help-row"><code class="mono">/boost &lt;tarefa&gt;</code><span>Raciocínio profundo (eleva esforço p/ Extra)</span></div>
           <div class="help-row"><code class="mono">/plan &lt;tarefa&gt;</code><span>Planejamento estruturado nativo do ACP</span></div>
           <div class="help-row"><code class="mono">/grill-me &lt;tarefa&gt;</code><span>Entrevista 1 pergunta por vez antes de codar</span></div>
