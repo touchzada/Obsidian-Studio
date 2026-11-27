@@ -20,8 +20,12 @@
 
 - **🧠 Editor completo de System Prompt & Agentes Nativos**
   - Edição ao vivo de agentes nativos (`~/.gemini/config/agents/<slug>/agent.md`) e também de agentes em arquivo `.md` solto (ex.: agentes GSD), com seleção de ferramentas, pasta de trabalho (`cwd`), templates prontos e histórico de snapshots para restaurar versões anteriores.
-- **⚡ Streaming em tempo real via `agy` (`stream-json`)**
-  - Respostas com **5-step velvet ink-wash streaming** (`CSS.highlights`), renderização Markdown com tabelas e blocos de código dobráveis, visualização detalhada de chamadas de ferramentas (*tool cards*), temporizador de raciocínio, métricas reais de **TTFT**, **TPS (`tok/s`)** e **Cache Hit**.
+- **⚡ Motor nativo `agy acp` (Agent Client Protocol · JSON-RPC 2.0)**
+  - **Troca ao vivo de modelo, esforço e modo** (`session/set_model` / `session/set_config_option`) no meio da conversa **sem reiniciar o processo e sem perder contexto**.
+  - **Cancelamento instantâneo (`session/cancel`)** no botão Stop e no Enviar Direto (*Steer*), mantendo o servidor ACP aquecido.
+  - **Pensamento real expansível (`agent_thought_chunk`)**, **plano de execução ao vivo (`plan`)**, **diffs estruturados** em tool cards e **envio nativo de imagens multimodais** (`{ type: "image" }`).
+  - **Modo interativo "Perguntar antes" (`session/request_permission`)** com cards de aprovação direto no chat (`Permitir`, `Permitir sempre`, `Negar`), além de `Completo`, `Editar arquivos` e `Somente leitura`.
+  - **Slash Commands reais do Antigravity** (`available_commands_update`) mesclados automaticamente no menu `/`, mais **uso de janela de contexto ao vivo (`usage_update`)** no tubo físico de água (512K / 1M dinâmico).
 - **⇶ Mensagens na fila + Enviar direto (*Queued Messages & Steer*)**
   - Continue digitando enquanto o agente trabalha:
     - **`Enter`** (ou `＋ Fila`): adiciona a mensagem na fila acima do composer e envia automaticamente assim que o turno atual termina.
@@ -70,7 +74,8 @@ Se você tiver o plugin [Obsidian Prism](https://github.com/RMvdesi/obsidian-pri
 
 | Arquivo | Função |
 | :--- | :--- |
-| `server.js` | Servidor HTTP + SSE zero-dependências (Node nativo), CRUD de agentes em `~/.gemini/config/agents/`, sessões persistentes `agy`, upload de anexos, telemetria e perfis de autenticação |
+| `acp-client.js` | Cliente JSON-RPC 2.0 zero-dependências para o `agy acp` (pool persistente, `session/new`, `load`, `set_model`, `set_config_option`, `prompt` multimodal, `cancel` e `request_permission`) |
+| `server.js` | Servidor HTTP + SSE zero-dependências (Node nativo), CRUD de agentes em `~/.gemini/config/agents/`, upload de anexos, telemetria e perfis de autenticação |
 | `public/index.html` | Estrutura do Studio/Chat, popovers ópticos, card de mensagens na fila, modal de contas e aparência |
 | `public/app.js` | Runtime do cliente, streaming SSE incremental, fila/steer de mensagens, context carryover, renderizador Markdown e estado local |
 | `public/prism-bridge.js` | Ponte óptica para os motores WebGL2/Canvas (aura, ripple, rim 300Hz, smooth caret, 512K vial, cut-crystal e mascots) |

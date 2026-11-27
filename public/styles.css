@@ -2420,3 +2420,87 @@ html[data-theme="light"] .ag-cs-orch-track {
   transition: opacity 150ms ease, color 150ms ease;
 }
 .sidebar-credit:hover { opacity: 1; color: var(--foreground); }
+
+/* ── ACP Live Thinking, Execution Plan & Interactive Permission Cards ── */
+.thought-stream-box {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--background) 70%, transparent);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.thought-stream-box.hidden { display: none; }
+
+.acp-plan-card {
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 78%, transparent);
+  border: 1px solid var(--border);
+}
+.acp-plan-card.hidden { display: none; }
+.acp-plan-head {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+  margin-bottom: 6px;
+}
+.acp-plan-list { display: flex; flex-direction: column; gap: 4px; }
+.acp-plan-row {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 12.5px; color: var(--secondary-foreground);
+}
+.acp-plan-row.status-completed { color: var(--muted-foreground); text-decoration: line-through; }
+.acp-plan-row.status-completed .acp-plan-ico { color: var(--success); text-decoration: none; }
+.acp-plan-row.status-in_progress { color: var(--foreground); font-weight: 600; }
+.acp-plan-row.status-in_progress .acp-plan-ico { color: #5CC6FC; }
+
+.acp-perm-host { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.acp-perm-card {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 92%, rgba(92, 198, 252, 0.08));
+  border: 1px solid rgba(92, 198, 252, 0.36);
+  box-shadow: inset 0 1px 0 var(--ag-cs-specular), 0 10px 26px -14px rgba(92, 198, 252, 0.35);
+}
+.acp-perm-card.resolved {
+  opacity: 0.72;
+  border-color: var(--border);
+  box-shadow: none;
+}
+.acp-perm-head {
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;
+}
+.acp-perm-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: #5CC6FC;
+}
+.acp-perm-pre {
+  margin: 0 0 10px; padding: 8px 10px; border-radius: 8px;
+  background: color-mix(in srgb, var(--background) 85%, transparent);
+  border: 1px solid var(--border);
+  font-size: 11px; max-height: 150px; overflow: auto; white-space: pre-wrap;
+  color: var(--secondary-foreground);
+}
+.acp-perm-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.perm-allow {
+  background: rgba(74, 222, 128, 0.16); color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.42);
+}
+.perm-allow:hover { background: rgba(74, 222, 128, 0.28); }
+.perm-always {
+  background: rgba(139, 92, 246, 0.2); color: #c4b5fd;
+  border-color: rgba(139, 92, 246, 0.48);
+}
+.perm-always:hover { background: rgba(139, 92, 246, 0.34); }
+.perm-deny {
+  background: rgba(248, 113, 113, 0.14); color: #f87171;
+  border-color: rgba(248, 113, 113, 0.38);
+}
+.perm-deny:hover { background: rgba(248, 113, 113, 0.26); }

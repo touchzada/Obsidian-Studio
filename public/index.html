@@ -243,7 +243,7 @@
                 </div>
               </div>
 
-              <!-- Custom Permissions Popover -->
+              <!-- Custom Permissions Popover (Live ACP Mode Switching!) -->
               <div class="glass-popover mode-popover hidden" id="modePopover">
                 <button type="button" class="mode-opt" data-mode="full">
                   <span class="mode-dot" style="background:var(--success);"></span>
@@ -252,11 +252,18 @@
                     <small>Arquivos, busca, terminal e web sem pausa</small>
                   </span>
                 </button>
+                <button type="button" class="mode-opt" data-mode="ask">
+                  <span class="mode-dot" style="background:#5CC6FC;"></span>
+                  <span class="mode-opt-text">
+                    <strong>Perguntar antes (ACP)</strong>
+                    <small>Pede aprovação interativa no chat antes de agir</small>
+                  </span>
+                </button>
                 <button type="button" class="mode-opt" data-mode="accept-edits">
                   <span class="mode-dot" style="background:var(--primary);"></span>
                   <span class="mode-opt-text">
                     <strong>Editar arquivos</strong>
-                    <small>Aprova leitura e edição de arquivos</small>
+                    <small>Aprova edição de arquivos e pergunta em comandos</small>
                   </span>
                 </button>
                 <button type="button" class="mode-opt" data-mode="plan">
@@ -272,7 +279,7 @@
               <div class="glass-popover vial-popover hidden" id="vialPopover">
                 <aside class="vial-rail">
                   <div class="vial-rail-head mono">
-                    <span>512K</span>
+                    <span id="vialCapLabel">512K</span>
                     <strong id="vialPctLabel">0.4%</strong>
                   </div>
                   <div class="vial-slot" id="vialDragHandle" title="Arraste ou clique no líquido para agitar!">

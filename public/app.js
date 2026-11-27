@@ -152,6 +152,9 @@ const state = {
   activeModel: 'gemini-4-neon-xhigh',
   activeCwd: '',
   activeMode: 'full',
+  contextSize: MAX_CONTEXT_TOKENS,
+  acpCommands: [],
+  acpTier: null,
   lastUsage: null,
   lastTps: 0,
   lastTtft: 0,
@@ -288,6 +291,7 @@ const el = {
   vialPopover: document.getElementById('vialPopover'),
   vialCanvas: document.getElementById('vialCanvas'),
   vialDragHandle: document.getElementById('vialDragHandle'),
+  vialCapLabel: document.getElementById('vialCapLabel'),
   vialPctLabel: document.getElementById('vialPctLabel'),
   vialStateLabel: document.getElementById('vialStateLabel'),
   vialModelRoute: document.getElementById('vialModelRoute'),
@@ -526,6 +530,18 @@ function refreshEffortSlider() {
   try { effortSliderMount?.refresh?.(); } catch {}
 }
 
+async function syncLiveSessionConfig() {
+  if (!state.sessionId) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(state.sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ model: state.activeModel, permissionMode: state.activeMode }),
+    });
+  } catch {
+    // Session will pick up updated model/mode on next turn if not yet created
+  }
+}
+
 async function selectModelFamily(familyId) {
   const fam = MODEL_FAMILIES.find((f) => f.id === familyId);
   if (!fam) return;
@@ -539,8 +555,8 @@ async function selectModelFamily(familyId) {
   }
   state.activeModel = nextModel;
   syncModelUI();
-  await startFreshSession({ clearMessages: false });
-  toast(`Modelo ativo: ${resolveModelInfo(nextModel).label}`, 'ok');
+  await syncLiveSessionConfig();
+  toast(`Modelo ativo (ACP ao vivo): ${resolveModelInfo(nextModel).label}`, 'ok');
 }
 
 async function selectEffort(effort, notify = false) {
@@ -553,10 +569,10 @@ async function selectEffort(effort, notify = false) {
   state.activeModel = nextModel;
   syncModelUI();
   if (changed) {
-    await startFreshSession({ clearMessages: false });
+    await syncLiveSessionConfig();
     if (notify) {
       const lbl = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra' }[effort] || effort;
-      toast(`Raciocínio: ${fam.name} · ${lbl}`, 'ok');
+      toast(`Raciocínio (ACP ao vivo): ${fam.name} · ${lbl}`, 'ok');
     }
   }
 }
@@ -683,8 +699,11 @@ function updateOpticsReadout() {
   const outTok = Number(u.output_tokens || 0);
   const thinkTok = Number(u.thinking_tokens || 0);
   const cacheTok = Number(u.cache_read_tokens || 0);
+  const ctxMax = Math.max(64000, Number(u.context_size || state.contextSize || MAX_CONTEXT_TOKENS));
+  const capLabel = ctxMax >= 1_000_000 ? `${Math.round(ctxMax / 1_000_000)}M` : `${Math.round(ctxMax / 1000)}K`;
+  if (el.vialCapLabel) el.vialCapLabel.textContent = capLabel;
   const usedTotal = Math.max(sysTok, inTok + outTok);
-  const ratio = Math.min(1, usedTotal / MAX_CONTEXT_TOKENS);
+  const ratio = Math.min(1, usedTotal / ctxMax);
   const pctStr = ratio < 0.1 ? (ratio * 100).toFixed(1) : String(Math.round(ratio * 100));
   const cacheHit = inTok + cacheTok > 0 ? Math.round((cacheTok / (inTok + cacheTok)) * 100) : 0;
 
@@ -693,26 +712,26 @@ function updateOpticsReadout() {
   el.ctxRingFg.style.strokeDashoffset = String(circ * (1 - Math.max(0.03, ratio)));
   el.liveCtxPct.textContent = `${pctStr}%`;
   el.liveTpsLabel.textContent = state.lastTps > 0 ? `${state.lastTps} tok/s` : '— tok/s';
-  el.liveCacheLabel.textContent = cacheTok > 0 ? `Cache ${cacheHit}%` : 'Cache —';
+  el.liveCacheLabel.textContent = cacheTok > 0 ? `Cache ${cacheHit}%` : 'ACP';
 
-  // 512K Physical Water Vial Popover
+  // Physical Water Vial Popover
   el.vialPctLabel.textContent = `${pctStr}%`;
   el.vialStateLabel.textContent = state.streaming ? 'STREAMING' : 'IDLE';
   const info = resolveModelInfo(state.activeModel);
   el.vialModelRoute.textContent = `${info.label} → ${state.activeModel}`;
   el.vialTtft.textContent = state.lastTtft > 0 ? `TTFT ${state.lastTtft.toFixed(2)}s` : 'TTFT —';
   el.vialTps.textContent = state.lastTps > 0 ? `TPS ${state.lastTps} tok/s` : 'TPS —';
-  el.vialUsedSummary.textContent = `${fmtCompact(usedTotal)} / 512k`;
+  el.vialUsedSummary.textContent = `${fmtCompact(usedTotal)} / ${capLabel.toLowerCase()}`;
   el.vialSysTok.textContent = `~${fmtCompact(sysTok)}`;
   el.vialInTok.textContent = fmtCompact(inTok);
   el.vialThinkTok.textContent = fmtCompact(thinkTok);
-  el.vialCacheTok.textContent = cacheTok > 0 ? `${cacheHit}% (${fmtCompact(cacheTok)})` : '0%';
+  el.vialCacheTok.textContent = cacheTok > 0 ? `${cacheHit}% (${fmtCompact(cacheTok)})` : 'ACP Live';
   el.vialTotalSaved.textContent = `${state.telemetry?.totalTurns || 0} turnos acumulados`;
 
   // 3-segment mini bar widths
-  const sysPct = Math.max(2, Math.min(60, (sysTok / MAX_CONTEXT_TOKENS) * 100 * 6));
-  const convPct = Math.max(inTok > 0 ? 2 : 0, Math.min(70, (Math.max(0, inTok - sysTok) / MAX_CONTEXT_TOKENS) * 100 * 6));
-  const thinkPct = Math.max(thinkTok > 0 ? 2 : 0, Math.min(40, (thinkTok / MAX_CONTEXT_TOKENS) * 100 * 6));
+  const sysPct = Math.max(2, Math.min(60, (sysTok / ctxMax) * 100 * 6));
+  const convPct = Math.max(inTok > 0 ? 2 : 0, Math.min(70, (Math.max(0, inTok - sysTok) / ctxMax) * 100 * 6));
+  const thinkPct = Math.max(thinkTok > 0 ? 2 : 0, Math.min(40, (thinkTok / ctxMax) * 100 * 6));
   el.segSys.style.width = `${sysPct}%`;
   el.segConv.style.width = `${convPct}%`;
   el.segThink.style.width = `${thinkPct}%`;
@@ -721,6 +740,7 @@ function updateOpticsReadout() {
   const segSum = Math.max(1, sysTok + convTok + thinkTok);
   prism?.updateVialState({
     fill: Math.max(0.08, ratio),
+    maxTokens: ctxMax,
     streaming: state.streaming,
     camp: info.camp,
     ratios: [sysTok / segSum, convTok / segSum, thinkTok / segSum],
@@ -1026,6 +1046,11 @@ function buildAssistantNode(msg, idx, isLast) {
   `;
   thoughtBody.appendChild(metaRow);
 
+  const thoughtTextEl = document.createElement('div');
+  thoughtTextEl.className = `thought-stream-box ${msg.thoughtText ? '' : 'hidden'}`;
+  thoughtTextEl.textContent = msg.thoughtText || '';
+  thoughtBody.appendChild(thoughtTextEl);
+
   const toolStack = document.createElement('div');
   toolStack.className = 'tool-stack';
   if (msg.tools?.length) {
@@ -1034,6 +1059,17 @@ function buildAssistantNode(msg, idx, isLast) {
   }
   details.appendChild(thoughtBody);
   wrapper.appendChild(details);
+
+  // Live ACP Plan Checklist (when agent emits `plan` updates)
+  const planEl = document.createElement('div');
+  planEl.className = `acp-plan-card ${msg.plan?.length ? '' : 'hidden'}`;
+  if (msg.plan?.length) planEl.innerHTML = renderPlanHtml(msg.plan);
+  wrapper.appendChild(planEl);
+
+  // Live ACP Interactive Permission Prompt Host (`session/request_permission`)
+  const permHost = document.createElement('div');
+  permHost.className = 'acp-perm-host';
+  wrapper.appendChild(permHost);
 
   // Pure Editorial Canvas Response (NO boxy card border!)
   const contentEl = document.createElement('div');
@@ -1068,12 +1104,76 @@ function buildAssistantNode(msg, idx, isLast) {
     summary,
     thoughtLabelEl: summary.querySelector('.thought-label'),
     thoughtBody,
+    thoughtTextEl,
     metaRow,
     toolStack,
+    planEl,
+    permHost,
     contentEl,
     footer,
     footerMetaEl: footer.querySelector('.footer-meta-span'),
   };
+}
+
+function renderPlanHtml(entries) {
+  const iconFor = (st) => (st === 'completed' ? '✓' : st === 'in_progress' ? '◎' : '○');
+  return `
+    <div class="acp-plan-head mono">✦ PLANO DE EXECUÇÃO (ACP)</div>
+    <div class="acp-plan-list">
+      ${entries.map((e) => `
+        <div class="acp-plan-row status-${escapeHtml(e.status || 'pending')}">
+          <span class="acp-plan-ico mono">${iconFor(e.status)}</span>
+          <span>${escapeHtml(e.content || e.title || '')}</span>
+        </div>`).join('')}
+    </div>`;
+}
+
+function renderPermissionPromptCard(permHost, data) {
+  if (!permHost) return;
+  const card = document.createElement('div');
+  card.className = 'acp-perm-card';
+  const inputStr = data.rawInput
+    ? (typeof data.rawInput === 'string' ? data.rawInput : JSON.stringify(data.rawInput, null, 2)).slice(0, 600)
+    : '';
+  const btnsHtml = (data.options || [])
+    .map((o) => {
+      const cls = String(o.kind || '').startsWith('reject') ? 'perm-deny' : o.kind === 'allow_always' ? 'perm-always' : 'perm-allow';
+      return `<button type="button" class="btn btn-xs ${cls}" data-opt-id="${escapeHtml(o.optionId)}">${escapeHtml(o.name)}</button>`;
+    })
+    .join('');
+  card.innerHTML = `
+    <div class="acp-perm-head">
+      <span class="acp-perm-badge mono">PERMISSÃO ACP · ${escapeHtml(data.kind || 'ação')}</span>
+      <strong>${escapeHtml(data.title || 'Ação solicitada')}</strong>
+    </div>
+    ${inputStr ? `<pre class="acp-perm-pre mono">${escapeHtml(inputStr)}</pre>` : ''}
+    <div class="acp-perm-actions">
+      ${btnsHtml}
+      <button type="button" class="btn btn-ghost btn-xs" data-opt-cancel="1">Cancelar</button>
+    </div>`;
+
+  const respond = async (payload, label) => {
+    card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try {
+      await api(`/api/sessions/${encodeURIComponent(state.sessionId)}/permission`, {
+        method: 'POST',
+        body: JSON.stringify({ requestId: data.requestId, ...payload }),
+      });
+      card.classList.add('resolved');
+      card.querySelector('.acp-perm-actions').innerHTML = `<span class="mono" style="font-size:11px;color:var(--muted-foreground);">✓ ${escapeHtml(label)}</span>`;
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
+  card.querySelectorAll('[data-opt-id]').forEach((b) => {
+    b.addEventListener('click', () => respond({ optionId: b.dataset.optId }, b.textContent));
+  });
+  card.querySelector('[data-opt-cancel]')?.addEventListener('click', () => respond({ cancelled: true }, 'Cancelado'));
+
+  permHost.appendChild(card);
+  prism?.animatePopoverIn(card);
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
 }
 
 function updateActiveAssistantDom(msg, addedChars = 0) {
@@ -1083,9 +1183,19 @@ function updateActiveAssistantDom(msg, addedChars = 0) {
   dom.summary.classList.toggle('streaming', Boolean(msg.pending));
   dom.thoughtLabelEl.textContent = buildThoughtHeaderSummary(msg);
 
+  if (msg.thoughtText && dom.thoughtTextEl) {
+    dom.thoughtTextEl.classList.remove('hidden');
+    dom.thoughtTextEl.textContent = msg.thoughtText;
+  }
+
   if (msg.tools?.length) {
     dom.toolStack.innerHTML = msg.tools.map(createToolCardHtml).join('');
     if (!dom.toolStack.parentElement) dom.thoughtBody.appendChild(dom.toolStack);
+  }
+
+  if (msg.plan?.length && dom.planEl) {
+    dom.planEl.classList.remove('hidden');
+    dom.planEl.innerHTML = renderPlanHtml(msg.plan);
   }
 
   dom.contentEl.classList.toggle('error-surface', Boolean(msg.error));
@@ -1254,6 +1364,7 @@ function renderHistoryPopover() {
 function syncModeUI() {
   const map = {
     full: { label: 'Completo', color: 'var(--success)' },
+    ask: { label: 'Perguntar', color: '#5CC6FC' },
     'accept-edits': { label: 'Editar', color: 'var(--primary)' },
     plan: { label: 'Planejar', color: 'var(--warning)' },
   };
@@ -1845,14 +1956,27 @@ function updateSlashMenu() {
   const val = getChatInputText();
   if (!val.startsWith('/') || val.includes('\n')) { el.slashMenu.classList.add('hidden'); return; }
   const q = val.toLowerCase();
-  const matches = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(q));
+  const acpCmds = (state.acpCommands || [])
+    .filter((c) => c && c.name)
+    .map((c) => ({ cmd: `/${c.name}`, desc: String(c.description || '').slice(0, 68), isAcp: true }));
+  const all = [...SLASH_COMMANDS, ...acpCmds.filter((a) => !SLASH_COMMANDS.some((s) => s.cmd === a.cmd))];
+  const matches = all.filter((c) => c.cmd.toLowerCase().startsWith(q)).slice(0, 14);
   if (!matches.length) { el.slashMenu.classList.add('hidden'); return; }
   state.slashIndex = Math.min(state.slashIndex, matches.length - 1);
   el.slashMenu.innerHTML = matches
-    .map((c, i) => `<button type="button" class="slash-item ${i === state.slashIndex ? 'active' : ''}" data-cmd="${escapeHtml(c.cmd)}"><span class="slash-cmd mono">${escapeHtml(c.cmd)}</span><span class="slash-desc">${escapeHtml(c.desc)}</span></button>`)
+    .map((c, i) => `<button type="button" class="slash-item ${i === state.slashIndex ? 'active' : ''}" data-cmd="${escapeHtml(c.cmd)}" data-is-acp="${c.isAcp ? '1' : '0'}"><span class="slash-cmd mono">${escapeHtml(c.cmd)}</span><span class="slash-desc">${escapeHtml(c.desc)}</span></button>`)
     .join('');
   el.slashMenu.querySelectorAll('.slash-item').forEach((btn) => {
-    btn.addEventListener('click', () => { setChatInputText(''); el.slashMenu.classList.add('hidden'); executeSlashCommand(btn.dataset.cmd); });
+    btn.addEventListener('click', () => {
+      el.slashMenu.classList.add('hidden');
+      if (btn.dataset.isAcp === '1') {
+        setChatInputText(`${btn.dataset.cmd} `);
+        el.chatInput.focus();
+      } else {
+        setChatInputText('');
+        executeSlashCommand(btn.dataset.cmd);
+      }
+    });
   });
   if (el.slashMenu.classList.contains('hidden')) {
     el.slashMenu.classList.remove('hidden');
@@ -1900,8 +2024,10 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
   const contextSeed = shouldSeedContext ? buildConversationContextSeed(priorMessagesSnapshot) : '';
 
   let payloadContent = rawContent;
-  if (attachments.length) {
-    payloadContent = `${rawContent}\n\n[Arquivos anexados pelo usuário — use view_file se precisar inspecioná-los:\n${attachments.map((a) => `- ${a.name} (${a.path})`).join('\n')}]`;
+  const imageAttachments = attachments.filter((a) => String(a.mime || '').startsWith('image/'));
+  const fileAttachments = attachments.filter((a) => !String(a.mime || '').startsWith('image/'));
+  if (fileAttachments.length) {
+    payloadContent = `${rawContent}\n\n[Arquivos anexados pelo usuário — use view_file se precisar inspecioná-los:\n${fileAttachments.map((a) => `- ${a.name} (${a.path})`).join('\n')}]`;
   }
   if (contextSeed) {
     payloadContent = `${contextSeed}\n\n[NOVA MENSAGEM DO USUÁRIO]\n${payloadContent}`;
@@ -1918,6 +2044,8 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
     agentName: state.currentSlug,
     model: state.activeModel,
     text: '',
+    thoughtText: '',
+    plan: [],
     tools: [],
     pending: true,
     elapsedSec: 0,
@@ -1951,7 +2079,7 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
     const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: payloadContent }),
+      body: JSON.stringify({ content: payloadContent, images: imageAttachments }),
       signal: controller.signal,
     });
     if (!res.ok) {
@@ -2057,6 +2185,42 @@ function processSseBlock(block, assistantMsg, startedAt) {
   if (eventName === 'init') {
     if (data.conversation_id) state.agyConversationId = data.conversation_id;
     if (data.init?.model) assistantMsg.model = data.init.model;
+    if (data.init?.tier) {
+      state.acpTier = data.init.tier;
+      if (el.headerAccountBtn && data.init.tier.name) {
+        el.headerAccountBtn.title = `Conta ativa (${data.init.tier.name}) · Clique para gerenciar`;
+      }
+    }
+    if (Array.isArray(data.commands) && data.commands.length) state.acpCommands = data.commands;
+    return;
+  }
+  if (eventName === 'commands') {
+    if (Array.isArray(data.commands)) state.acpCommands = data.commands;
+    return;
+  }
+  if (eventName === 'usage') {
+    if (data.size) state.contextSize = Number(data.size);
+    if (data.usage) state.lastUsage = data.usage;
+    updateOpticsReadout();
+    return;
+  }
+  if (eventName === 'thought_delta') {
+    const chunk = data.text_delta || '';
+    assistantMsg.thoughtText = (assistantMsg.thoughtText || '') + chunk;
+    if (data.thinking_tokens) assistantMsg.thinkingTokens = data.thinking_tokens;
+    updateActiveAssistantDom(assistantMsg, 0);
+    return;
+  }
+  if (eventName === 'plan') {
+    if (Array.isArray(data.entries)) {
+      assistantMsg.plan = data.entries;
+      updateActiveAssistantDom(assistantMsg, 0);
+    }
+    return;
+  }
+  if (eventName === 'permission_request') {
+    setStatus('Aguardando permissão…', 'active');
+    renderPermissionPromptCard(state.activeTurnDom?.permHost, data);
     return;
   }
   if (eventName === 'delta') {
@@ -2202,24 +2366,24 @@ function bindEvents() {
     if (!inside && !onTrigger) closeAllPopovers();
   });
 
-  // Orchestrator Planner Pills (effort slider is mounted in init via real Obsidian Prism module)
+  // Orchestrator Planner Pills (Live ACP switch — zero restart!)
   el.orchPlannerPills.querySelectorAll('[data-orch]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       state.activeModel = btn.dataset.orch;
       syncModelUI();
-      await startFreshSession({ clearMessages: false });
-      toast(`Orchestrator ativo: ${resolveModelInfo(state.activeModel).label}`, 'ok');
+      await syncLiveSessionConfig();
+      toast(`Orchestrator ativo (ACP ao vivo): ${resolveModelInfo(state.activeModel).label}`, 'ok');
     });
   });
 
-  // Permissions options
+  // Permissions options (Live ACP switch — zero restart!)
   el.modePopover.querySelectorAll('[data-mode]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       state.activeMode = btn.dataset.mode;
       syncModeUI();
       closeAllPopovers();
-      await startFreshSession({ clearMessages: false });
-      toast(`Permissões: ${el.modeTriggerLabel.textContent}`, 'ok');
+      await syncLiveSessionConfig();
+      toast(`Permissões (ACP ao vivo): ${el.modeTriggerLabel.textContent}`, 'ok');
     });
   });
 
@@ -2618,6 +2782,10 @@ async function init() {
     ]);
     state.meta = meta;
     state.telemetry = meta.telemetry;
+    if (Array.isArray(meta.acp?.availableCommands) && meta.acp.availableCommands.length) {
+      state.acpCommands = meta.acp.availableCommands;
+    }
+    if (meta.acp?.tier) state.acpTier = meta.acp.tier;
     state.agents = agentsData.agents || [];
     state.conversations = convsData.conversations || [];
     state.activeModel = meta.defaultModel || 'gemini-4-neon-xhigh';

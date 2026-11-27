@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
+const { AcpClient } = require('./acp-client');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT) || 4321;
@@ -89,7 +90,9 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 let cachedModels = null;
+let cachedAcpMeta = { version: null, tier: null, availableCommands: [] };
 const sessions = new Map();
+const acpClients = new Map();
 
 // ── Antigravity Auth Profiles (documented methods only) ─────────────────────
 // oauth : default `agy` sign-in (OS keyring). Switching Google account = /logout + new sign-in.
@@ -173,7 +176,13 @@ function restartAllSessionProcesses() {
   for (const s of sessions.values()) {
     try { closeSessionProcess(s); } catch {}
     s.resumeConversationId = null;
+    s.acpSessionId = null;
   }
+  for (const client of acpClients.values()) {
+    try { client.destroy(); } catch {}
+  }
+  acpClients.clear();
+  cachedAcpMeta.tier = null;
 }
 
 function launchGoogleSwitchConsole() {
@@ -546,126 +555,332 @@ function getModels(forceRefresh = false) {
   });
 }
 
-function buildAgyArgs(session) {
-  const args = [];
-  if (session.agentFormat !== 'flat' && session.agentName) {
-    args.push('--agent', session.agentName);
-  }
-  args.push(
-    '--model',
-    session.model || DEFAULT_MODEL,
-    '--input-format',
-    'stream-json',
-    '--output-format',
-    'stream-json'
-  );
+// ── ACP Runtime Management (`agy acp` JSON-RPC 2.0) ──────────────────────────
+const ACP_QUOTA_WARN_RE = /⚠\s*(?:Individual quota reached|Quota exceeded|Rate limit|Authentication|Unauthorized)/i;
 
-  if (session.resumeConversationId) {
-    args.push('--conversation', session.resumeConversationId);
-  }
+function mapPermissionToAcpMode(permissionMode) {
+  if (permissionMode === 'plan') return 'plan';
+  if (permissionMode === 'accept-edits') return 'accept-edits';
+  return 'default'; // 'full' auto-approves in server; 'ask' prompts user in UI
+}
 
-  if (session.permissionMode === 'plan') {
-    args.push('--mode', 'plan');
-  } else if (session.permissionMode === 'accept-edits') {
-    args.push('--mode', 'accept-edits');
-  } else {
-    args.push('--dangerously-skip-permissions');
-  }
+function getActiveAuthProfile() {
+  const auth = loadAuth();
+  return auth.profiles.find((p) => p.id === auth.activeId) || auth.profiles[0];
+}
 
-  return args;
+function getOrCreateAcpClient(agentName, agentFormat, cwd) {
+  const profile = getActiveAuthProfile();
+  const authKey = profile?.id || 'oauth';
+  const agentKey = agentFormat === 'dir' ? agentName : '_flat_default';
+  const key = `${authKey}::${agentKey}`;
+  const existing = acpClients.get(key);
+  if (existing && existing.alive) return existing;
+
+  const { env } = authLaunchFor(profile);
+  const client = new AcpClient({
+    agyBin: AGY_BIN,
+    agentName,
+    agentFormat,
+    cwd: cwd && fs.existsSync(cwd) ? cwd : DEFAULT_CWD,
+    env,
+    authType: profile?.type || 'oauth',
+  });
+  client.on('exit', () => {
+    if (acpClients.get(key) === client) acpClients.delete(key);
+  });
+  acpClients.set(key, client);
+  return client;
+}
+
+function destroyAgentAcpClients(agentName) {
+  for (const [key, client] of acpClients.entries()) {
+    if (key.endsWith(`::${agentName}`)) {
+      try { client.destroy(); } catch {}
+      acpClients.delete(key);
+    }
+  }
 }
 
 function closeSessionProcess(session) {
   if (!session) return;
-  session.flatPromptInjected = false;
-  if (!session.proc) return;
-  const proc = session.proc;
-  session.proc = null;
+  if (session.pendingPermissions) {
+    for (const entry of session.pendingPermissions.values()) {
+      try { entry.cancel(); } catch {}
+    }
+    session.pendingPermissions.clear();
+  }
+  if (session.acpClient && session.acpSessionId) {
+    try { session.acpClient.closeSession(session.acpSessionId); } catch {}
+  }
+  session.acpClient = null;
+  session.acpSessionId = null;
   session.busy = false;
-  try {
-    if (proc.stdin && !proc.stdin.destroyed) {
-      proc.stdin.end();
-    }
-  } catch {
-    // ignore
-  }
-  try {
-    if (!proc.killed) {
-      proc.kill();
-    }
-  } catch {
-    // ignore
-  }
+  session.activeTurn = null;
 }
 
-function startAgyProcess(session) {
-  const cwd =
-    session.cwd && fs.existsSync(session.cwd) && fs.statSync(session.cwd).isDirectory()
-      ? session.cwd
-      : DEFAULT_CWD;
+function extractAcpToolOutput(update) {
+  const parts = [];
+  if (update.rawOutput) {
+    parts.push(typeof update.rawOutput === 'string' ? update.rawOutput : JSON.stringify(update.rawOutput, null, 2));
+  }
+  if (Array.isArray(update.content)) {
+    for (const c of update.content) {
+      if (!c) continue;
+      if (c.type === 'content' && c.content?.type === 'text' && c.content.text) {
+        parts.push(c.content.text);
+      } else if (c.type === 'text' && c.text) {
+        parts.push(c.text);
+      } else if (c.type === 'diff') {
+        const header = c.path ? `--- ${c.path}` : '--- diff';
+        const oldTxt = String(c.oldText || '').slice(0, 1400);
+        const newTxt = String(c.newText || '').slice(0, 2000);
+        parts.push(`${header}\n${oldTxt ? `[-]\n${oldTxt}\n` : ''}[+]\n${newTxt}`);
+      }
+    }
+  }
+  return parts.join('\n').trim();
+}
 
-  const authLaunch = activeAuthLaunch();
-  const args = [...authLaunch.extraArgs, ...buildAgyArgs(session)];
-  const proc = spawn(AGY_BIN, args, {
-    cwd,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-    env: authLaunch.env,
+async function ensureAcpSession(session) {
+  const client = getOrCreateAcpClient(session.agentName, session.agentFormat, session.cwd);
+  const initRes = await client.ensureReady();
+  if (initRes?.agentInfo?.version) cachedAcpMeta.version = initRes.agentInfo.version;
+
+  if (session.acpClient === client && session.acpSessionId) {
+    return { client, acpSessionId: session.acpSessionId, reused: true };
+  }
+
+  let systemPromptAppend = '';
+  if (session.agentFormat === 'flat' && session.agentFilePath) {
+    try {
+      const parsed = parseAgentMarkdown(fs.readFileSync(session.agentFilePath, 'utf8'), session.agentName);
+      if (parsed.systemPrompt && parsed.systemPrompt.trim()) {
+        systemPromptAppend = `[ACTIVE AGENT ROLE: ${session.agentName}]\n${parsed.systemPrompt.trim()}`;
+      }
+    } catch {}
+  }
+
+  let sessRes = null;
+  let resumed = false;
+  if (session.resumeConversationId) {
+    try {
+      sessRes = await client.loadSession({ sessionId: session.resumeConversationId, cwd: session.cwd });
+      resumed = true;
+    } catch {
+      session.resumeConversationId = null;
+      sessRes = null;
+    }
+  }
+  if (!sessRes) {
+    sessRes = await client.newSession({ cwd: session.cwd, systemPromptAppend });
+  }
+
+  const acpSessionId = sessRes?.sessionId || session.resumeConversationId;
+  if (!acpSessionId) throw new Error('ACP não retornou sessionId.');
+
+  session.acpClient = client;
+  session.acpSessionId = acpSessionId;
+  session.conversationId = acpSessionId;
+  session.initInfo = {
+    engine: 'acp',
+    agentVersion: initRes?.agentInfo?.version || 'acp',
+    model: session.model,
+    tier: sessRes?._meta?.antigravity?.tier || client.tier || null,
+    resumed,
+  };
+  if (session.initInfo.tier) cachedAcpMeta.tier = session.initInfo.tier;
+  if (client.availableCommands?.length) cachedAcpMeta.availableCommands = client.availableCommands;
+
+  // Apply selected model & mode live on the ACP session
+  if (session.model) {
+    try { await client.setModel(acpSessionId, session.model); } catch {}
+  }
+  try {
+    await client.setMode(acpSessionId, mapPermissionToAcpMode(session.permissionMode));
+  } catch {}
+
+  // Bind live ACP updates & interactive permission requests for this session
+  client.registerSession(acpSessionId, {
+    onUpdate: (update) => handleAcpUpdate(session, update),
+    onPermissionRequest: (rpcId, params) => handleAcpPermissionRequest(session, client, rpcId, params),
   });
 
-  session.proc = proc;
-  session.stdoutBuffer = '';
-  session.stderrBuffer = '';
+  return { client, acpSessionId, reused: false };
+}
 
-  proc.stdout.setEncoding('utf8');
-  proc.stderr.setEncoding('utf8');
+function handleAcpPermissionRequest(session, client, rpcId, params) {
+  const options = Array.isArray(params?.options) ? params.options : [];
+  const allowOpt =
+    options.find((o) => o.kind === 'allow_always') ||
+    options.find((o) => o.kind === 'allow_once') ||
+    options[0];
 
-  proc.stdout.on('data', (chunk) => {
-    session.stdoutBuffer += chunk;
-    let idx;
-    while ((idx = session.stdoutBuffer.indexOf('\n')) !== -1) {
-      const line = session.stdoutBuffer.slice(0, idx).trim();
-      session.stdoutBuffer = session.stdoutBuffer.slice(idx + 1);
-      if (!line) continue;
-      handleAgyLine(session, line);
+  // Auto-approve immediately in 'full' mode
+  if (session.permissionMode === 'full') {
+    if (allowOpt) {
+      client.replyResult(rpcId, { outcome: { outcome: 'selected', optionId: allowOpt.optionId } });
+    } else {
+      client.replyResult(rpcId, { outcome: { outcome: 'cancelled' } });
     }
+    return;
+  }
+
+  const turn = session.activeTurn;
+  if (!turn || !turn.res || turn.res.writableEnded) {
+    client.replyResult(rpcId, { outcome: { outcome: 'cancelled' } });
+    return;
+  }
+
+  const reqId = `perm_${crypto.randomBytes(4).toString('hex')}`;
+  if (!session.pendingPermissions) session.pendingPermissions = new Map();
+
+  session.pendingPermissions.set(reqId, {
+    resolve(optionId) {
+      session.pendingPermissions.delete(reqId);
+      try {
+        client.replyResult(rpcId, { outcome: { outcome: 'selected', optionId } });
+      } catch {}
+    },
+    cancel() {
+      session.pendingPermissions.delete(reqId);
+      try {
+        client.replyResult(rpcId, { outcome: { outcome: 'cancelled' } });
+      } catch {}
+    },
   });
 
-  proc.stderr.on('data', (chunk) => {
-    session.stderrBuffer += chunk;
-    if (session.stderrBuffer.length > 8000) {
-      session.stderrBuffer = session.stderrBuffer.slice(-8000);
-    }
+  const tc = params.toolCall || {};
+  sendSse(turn.res, 'permission_request', {
+    requestId: reqId,
+    toolCallId: tc.toolCallId || '',
+    title: tc.title || tc.name || 'Ação do agente',
+    kind: tc.kind || 'other',
+    rawInput: tc.rawInput || null,
+    options: options.map((o) => ({
+      optionId: o.optionId,
+      name: o.name || o.optionId,
+      kind: o.kind || 'allow_once',
+    })),
   });
+}
 
-  proc.on('error', (err) => {
-    if (session.activeTurn) {
-      sendSse(session.activeTurn.res, 'error', {
-        message: `Falha ao iniciar agy: ${err.message}`,
-      });
-      finishActiveTurn(session);
-    }
-    session.proc = null;
-  });
+function handleAcpUpdate(session, update) {
+  if (!update || !update.sessionUpdate) return;
+  const turn = session.activeTurn;
+  const kind = update.sessionUpdate;
 
-  proc.on('exit', (code, signal) => {
-    if (session.stdoutBuffer.trim()) {
-      handleAgyLine(session, session.stdoutBuffer.trim());
-      session.stdoutBuffer = '';
-    }
-    if (session.activeTurn) {
-      const detail = session.stderrBuffer.trim();
-      sendSse(session.activeTurn.res, 'error', {
-        message: detail || `Processo agy encerrado (code=${code}, signal=${signal || 'none'}).`,
-      });
-      finishActiveTurn(session);
-    }
-    if (session.proc === proc) {
-      session.proc = null;
-    }
-  });
+  if (kind === 'available_commands_update' && Array.isArray(update.availableCommands)) {
+    cachedAcpMeta.availableCommands = update.availableCommands;
+    if (turn) sendSse(turn.res, 'commands', { commands: update.availableCommands });
+    return;
+  }
 
-  return proc;
+  if (kind === 'usage_update') {
+    const used = Number(update.used || 0);
+    const size = Number(update.size || 512000);
+    session.contextUsed = used;
+    session.contextSize = size;
+    if (turn) {
+      turn.lastUsage = {
+        input_tokens: used,
+        output_tokens: turn.estOutputTokens || 0,
+        thinking_tokens: turn.estThinkingTokens || 0,
+        cache_read_tokens: 0,
+        context_size: size,
+      };
+      sendSse(turn.res, 'usage', { used, size, usage: turn.lastUsage });
+    }
+    return;
+  }
+
+  if (!turn) return;
+
+  if (kind === 'agent_message_chunk') {
+    const text = update.content?.type === 'text' ? String(update.content.text || '') : '';
+    if (!text) return;
+    if (!turn.firstDeltaAt) {
+      turn.firstDeltaAt = Date.now();
+      turn.ttft = (turn.firstDeltaAt - turn.startedAt) / 1000;
+    }
+    turn.fullText += text;
+    turn.charCount += text.length;
+    turn.estOutputTokens = Math.ceil(turn.charCount / 4);
+    if (ACP_QUOTA_WARN_RE.test(text)) {
+      turn.quotaErrorText = text.trim();
+    }
+    sendSse(turn.res, 'delta', {
+      text_delta: text,
+      ttft: turn.ttft,
+    });
+    return;
+  }
+
+  if (kind === 'agent_thought_chunk') {
+    const text = update.content?.type === 'text' ? String(update.content.text || '') : '';
+    if (!text) return;
+    turn.thoughtChars += text.length;
+    turn.estThinkingTokens = Math.ceil(turn.thoughtChars / 4);
+    sendSse(turn.res, 'thought_delta', {
+      text_delta: text,
+      thinking_tokens: turn.estThinkingTokens,
+    });
+    return;
+  }
+
+  if (kind === 'plan' && Array.isArray(update.entries)) {
+    sendSse(turn.res, 'plan', { entries: update.entries });
+    return;
+  }
+
+  if (kind === 'tool_call' || kind === 'tool_call_update') {
+    const id = update.toolCallId || `tc_${Date.now()}`;
+    const prev = turn.toolsById.get(id) || {
+      step_index: id,
+      name: 'tool',
+      kind: 'other',
+      state: 'RUNNING',
+      rawInput: null,
+      output: '',
+      error: null,
+      locations: [],
+      startedAt: Date.now(),
+    };
+    if (update.title) prev.name = update.title;
+    if (update.kind) prev.kind = update.kind;
+    if (update.rawInput !== undefined) prev.rawInput = update.rawInput;
+    if (Array.isArray(update.locations)) prev.locations = update.locations;
+    const outStr = extractAcpToolOutput(update);
+    if (outStr) prev.output = outStr;
+
+    const st = String(update.status || '').toLowerCase();
+    if (st === 'completed') {
+      prev.state = 'DONE';
+      prev.duration_seconds = Number(((Date.now() - prev.startedAt) / 1000).toFixed(2));
+    } else if (st === 'failed' || st === 'error') {
+      prev.state = 'ERROR';
+      prev.error = outStr || 'Falha na ferramenta';
+      prev.duration_seconds = Number(((Date.now() - prev.startedAt) / 1000).toFixed(2));
+    } else if (st === 'in_progress' || st === 'pending') {
+      prev.state = 'RUNNING';
+    }
+    turn.toolsById.set(id, prev);
+
+    sendSse(turn.res, 'tool', {
+      step_index: id,
+      state: prev.state,
+      tool_name: prev.name,
+      kind: prev.kind,
+      duration_seconds: prev.duration_seconds,
+      tool_info: {
+        name: prev.name,
+        parameters: prev.rawInput,
+        output: prev.output,
+        error: prev.error,
+        locations: prev.locations,
+      },
+    });
+  }
 }
 
 function sendSse(res, eventName, data) {
@@ -679,104 +894,6 @@ function finishActiveTurn(session) {
   session.busy = false;
   if (turn && turn.res && !turn.res.writableEnded) {
     turn.res.end();
-  }
-}
-
-function handleAgyLine(session, line) {
-  let payload;
-  try {
-    payload = JSON.parse(line);
-  } catch {
-    return;
-  }
-
-  const turn = session.activeTurn;
-
-  if (payload.event === 'init') {
-    session.conversationId = payload.conversation_id || session.conversationId;
-    session.initInfo = payload.init || {};
-    if (turn) {
-      sendSse(turn.res, 'init', {
-        conversation_id: session.conversationId,
-        init: session.initInfo,
-      });
-    }
-    return;
-  }
-
-  if (payload.event === 'step_update' && payload.step_update) {
-    const step = payload.step_update;
-    if (step.conversation_id) session.conversationId = step.conversation_id;
-    if (!turn) return;
-
-    if (step.step_type === 'agent_response') {
-      if (typeof step.text_delta === 'string' && step.text_delta.length > 0) {
-        if (!turn.firstDeltaAt) {
-          turn.firstDeltaAt = Date.now();
-          turn.ttft = (turn.firstDeltaAt - turn.startedAt) / 1000;
-        }
-        turn.charCount += step.text_delta.length;
-        sendSse(turn.res, 'delta', {
-          step_index: step.step_index,
-          state: step.state,
-          text_delta: step.text_delta,
-          ttft: turn.ttft,
-        });
-      }
-      if (step.state === 'DONE' && step.usage) {
-        turn.lastStepUsage = step.usage;
-        turn.lastStepDuration = step.duration_seconds || 0;
-        sendSse(turn.res, 'step_usage', {
-          step_index: step.step_index,
-          duration_seconds: step.duration_seconds,
-          usage: step.usage,
-        });
-      }
-    } else if (step.step_type === 'tool') {
-      sendSse(turn.res, 'tool', {
-        step_index: step.step_index,
-        state: step.state,
-        tool_name: step.tool_name || step.tool_info?.name || 'tool',
-        duration_seconds: step.duration_seconds,
-        tool_info: step.tool_info || null,
-      });
-    } else if (step.step_type === 'subagent' || step.subagent_info) {
-      sendSse(turn.res, 'subagent', {
-        step_index: step.step_index,
-        state: step.state,
-        subagent_info: step.subagent_info || null,
-      });
-    }
-    return;
-  }
-
-  if (payload.event === 'result' && payload.result) {
-    const result = payload.result;
-    if (result.conversation_id) session.conversationId = result.conversation_id;
-    session.lastUsage = result.usage || null;
-    session.numTurns = result.num_turns || session.numTurns + 1;
-
-    let tps = 0;
-    let ttft = 0;
-    if (turn) {
-      const elapsedSec = Math.max(0.1, (Date.now() - turn.startedAt) / 1000);
-      ttft = turn.ttft || elapsedSec;
-      const stepOut = Number(turn.lastStepUsage?.output_tokens || result.usage?.output_tokens || 0);
-      const genSec = Math.max(0.15, turn.lastStepDuration || elapsedSec);
-      tps = stepOut > 0 ? stepOut / genSec : 0;
-
-      const turnUsage = turn.lastStepUsage || result.usage;
-      const telemetry = recordTurnTelemetry(turnUsage, tps, ttft);
-
-      sendSse(turn.res, 'result', {
-        ...result,
-        turn_usage: turnUsage,
-        tps: Number(tps.toFixed(1)),
-        ttft: Number(ttft.toFixed(2)),
-        telemetry,
-      });
-      finishActiveTurn(session);
-    }
   }
 }
 
@@ -859,12 +976,27 @@ const server = http.createServer(async (req, res) => {
         toolGroups: TOOL_GROUPS,
         telemetry: loadTelemetry(),
         userName: os.userInfo().username || 'Operator',
+        acp: {
+          engine: 'acp',
+          version: cachedAcpMeta.version,
+          tier: cachedAcpMeta.tier,
+          availableCommands: cachedAcpMeta.availableCommands || [],
+        },
         auth: {
           activeId: auth.activeId,
           activeName: activeProf?.name || 'Conta Google (Antigravity)',
           activeType: activeProf?.type || 'oauth',
+          tier: cachedAcpMeta.tier,
         },
       });
+    }
+
+    // List native Antigravity ACP sessions
+    if (req.method === 'GET' && pathname === '/api/acp/sessions') {
+      const cwd = urlObj.searchParams.get('cwd') || DEFAULT_CWD;
+      const client = getOrCreateAcpClient('neon-agent', 'dir', cwd);
+      const listed = await client.listSessions(cwd);
+      return sendJson(res, 200, { sessions: listed?.sessions || [] });
     }
 
     // ── Auth / Account switcher ─────────────────────────────────────────────
@@ -1158,10 +1290,11 @@ const server = http.createServer(async (req, res) => {
         const history = saveHistorySnapshot(slug, updated.systemPrompt, updated.description);
 
         for (const s of sessions.values()) {
-          if (s.agentName === slug && s.proc) {
+          if (s.agentName === slug && s.acpSessionId) {
             s.promptStale = true;
           }
         }
+        destroyAgentAcpClients(slug);
 
         return sendJson(res, 200, {
           agent: {
@@ -1211,17 +1344,20 @@ const server = http.createServer(async (req, res) => {
         agentName,
         agentFormat: resolvedAgent.format,
         agentFilePath: resolvedAgent.filePath,
-        flatPromptInjected: false,
         model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : DEFAULT_MODEL,
         cwd,
-        permissionMode: ['full', 'accept-edits', 'plan'].includes(body.permissionMode)
+        permissionMode: ['full', 'ask', 'accept-edits', 'plan'].includes(body.permissionMode)
           ? body.permissionMode
           : 'full',
         resumeConversationId:
           typeof body.resumeConversationId === 'string' && body.resumeConversationId.trim()
             ? body.resumeConversationId.trim()
             : null,
-        proc: null,
+        acpClient: null,
+        acpSessionId: null,
+        pendingPermissions: new Map(),
+        contextUsed: 0,
+        contextSize: 512000,
         busy: false,
         activeTurn: null,
         conversationId: body.resumeConversationId || null,
@@ -1241,11 +1377,55 @@ const server = http.createServer(async (req, res) => {
           cwd: session.cwd,
           permissionMode: session.permissionMode,
           conversationId: session.conversationId,
+          engine: 'acp',
         },
       });
     }
 
-    // Stream a message in a session
+    // Live update model / permissionMode on an existing ACP session (ZERO restart!)
+    const patchSessionMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/);
+    if (req.method === 'PATCH' && patchSessionMatch) {
+      const session = sessions.get(patchSessionMatch[1]);
+      if (!session) return sendJson(res, 404, { error: 'Sessão não encontrada.' });
+      const body = await readJsonBody(req);
+      if (typeof body.model === 'string' && body.model.trim()) {
+        session.model = body.model.trim();
+        if (session.acpClient?.alive && session.acpSessionId) {
+          try { await session.acpClient.setModel(session.acpSessionId, session.model); } catch {}
+        }
+      }
+      if (['full', 'ask', 'accept-edits', 'plan'].includes(body.permissionMode)) {
+        session.permissionMode = body.permissionMode;
+        if (session.acpClient?.alive && session.acpSessionId) {
+          try {
+            await session.acpClient.setMode(session.acpSessionId, mapPermissionToAcpMode(session.permissionMode));
+          } catch {}
+        }
+      }
+      return sendJson(res, 200, {
+        session: {
+          id: session.id,
+          model: session.model,
+          permissionMode: session.permissionMode,
+          liveUpdated: Boolean(session.acpSessionId),
+        },
+      });
+    }
+
+    // Resolve an interactive ACP permission prompt (`session/request_permission`)
+    const permMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/permission$/);
+    if (req.method === 'POST' && permMatch) {
+      const session = sessions.get(permMatch[1]);
+      if (!session) return sendJson(res, 404, { error: 'Sessão não encontrada.' });
+      const body = await readJsonBody(req);
+      const entry = session.pendingPermissions?.get(body.requestId);
+      if (!entry) return sendJson(res, 404, { error: 'Pedido de permissão já expirado ou resolvido.' });
+      if (body.cancelled || !body.optionId) entry.cancel();
+      else entry.resolve(body.optionId);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // Stream a message in an ACP session (`session/prompt` over JSON-RPC 2.0 -> SSE)
     const msgMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/message$/);
     if (req.method === 'POST' && msgMatch) {
       const sessionId = msgMatch[1];
@@ -1257,7 +1437,8 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readJsonBody(req);
       const content = typeof body.content === 'string' ? body.content.trim() : '';
-      if (!content) return sendJson(res, 400, { error: 'Mensagem vazia.' });
+      const images = Array.isArray(body.images) ? body.images : [];
+      if (!content && images.length === 0) return sendJson(res, 400, { error: 'Mensagem vazia.' });
 
       res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -1273,67 +1454,111 @@ const server = http.createServer(async (req, res) => {
         firstDeltaAt: null,
         ttft: 0,
         charCount: 0,
-        lastStepUsage: null,
-        lastStepDuration: 0,
+        thoughtChars: 0,
+        estOutputTokens: 0,
+        estThinkingTokens: 0,
+        fullText: '',
+        quotaErrorText: '',
+        lastUsage: null,
+        toolsById: new Map(),
       };
 
       res.on('close', () => {
         if (session.activeTurn && session.activeTurn.res === res && !res.writableEnded) {
-          session.activeTurn = null;
-          closeSessionProcess(session);
-        }
-      });
-
-      if (!session.proc) {
-        session.promptStale = false;
-        startAgyProcess(session);
-      } else if (session.initInfo) {
-        sendSse(res, 'init', {
-          conversation_id: session.conversationId,
-          init: session.initInfo,
-          reused: true,
-        });
-      }
-
-      let finalContent = content;
-      if (session.agentFormat === 'flat' && !session.flatPromptInjected && session.agentFilePath) {
-        try {
-          const rawMd = fs.readFileSync(session.agentFilePath, 'utf8');
-          const parsed = parseAgentMarkdown(rawMd, session.agentName);
-          if (parsed.systemPrompt && parsed.systemPrompt.trim()) {
-            finalContent = `[INSTRUÇÕES DO AGENTE ATIVO: ${session.agentName}]\nSiga rigorosamente o papel e as instruções abaixo durante toda esta conversa:\n\n${parsed.systemPrompt.trim()}\n\n[MENSAGEM DO USUÁRIO]\n${content}`;
+          if (session.acpClient?.alive && session.acpSessionId) {
+            session.acpClient.cancel(session.acpSessionId);
           }
-          session.flatPromptInjected = true;
-        } catch {
-          // fallback to raw content if file cannot be read
+          finishActiveTurn(session);
         }
-      }
-
-      const payload = JSON.stringify({
-        event: 'user',
-        message: { content: finalContent },
       });
 
       try {
-        session.proc.stdin.write(`${payload}\n`);
+        session.promptStale = false;
+        const { client, acpSessionId, reused } = await ensureAcpSession(session);
+        sendSse(res, 'init', {
+          conversation_id: acpSessionId,
+          init: session.initInfo,
+          reused,
+          commands: client.availableCommands || cachedAcpMeta.availableCommands || [],
+        });
+
+        // Build ACP multimodal prompt blocks (text + native base64 images!)
+        const promptBlocks = [];
+        if (content) promptBlocks.push({ type: 'text', text: content });
+        for (const img of images.slice(0, 6)) {
+          if (!img || typeof img.path !== 'string') continue;
+          const resolvedImg = path.resolve(img.path);
+          if (!resolvedImg.startsWith(UPLOADS_DIR) || !fs.existsSync(resolvedImg)) continue;
+          const mime = String(img.mime || 'image/png');
+          if (!mime.startsWith('image/')) continue;
+          try {
+            const b64 = fs.readFileSync(resolvedImg).toString('base64');
+            promptBlocks.push({ type: 'image', data: b64, mimeType: mime });
+          } catch {}
+        }
+
+        const promptRes = await client.prompt(acpSessionId, promptBlocks);
+        const turn = session.activeTurn;
+        if (turn && turn.res === res) {
+          const elapsedSec = Math.max(0.1, (Date.now() - turn.startedAt) / 1000);
+          const ttft = turn.ttft || elapsedSec;
+          const genSec = Math.max(0.15, elapsedSec - (turn.firstDeltaAt ? ttft : 0));
+          const outTok = turn.estOutputTokens || Math.ceil(turn.charCount / 4);
+          const tps = outTok > 0 ? outTok / genSec : 0;
+
+          const turnUsage = {
+            input_tokens: session.contextUsed || Math.ceil(content.length / 4),
+            output_tokens: outTok,
+            thinking_tokens: turn.estThinkingTokens || 0,
+            cache_read_tokens: 0,
+            context_size: session.contextSize || 512000,
+          };
+          session.lastUsage = turnUsage;
+          session.numTurns += 1;
+          const telemetry = recordTurnTelemetry(turnUsage, tps, ttft);
+
+          const isQuotaErr = Boolean(turn.quotaErrorText);
+          sendSse(res, 'result', {
+            conversation_id: acpSessionId,
+            status: isQuotaErr ? 'ERROR' : 'SUCCESS',
+            stopReason: promptRes?.stopReason || 'end_turn',
+            error: isQuotaErr ? turn.quotaErrorText : undefined,
+            usage: turnUsage,
+            turn_usage: turnUsage,
+            tps: Number(tps.toFixed(1)),
+            ttft: Number(ttft.toFixed(2)),
+            telemetry,
+          });
+          finishActiveTurn(session);
+        }
       } catch (err) {
-        sendSse(res, 'error', { message: `Erro ao enviar mensagem para o agy: ${err.message}` });
-        finishActiveTurn(session);
+        if (session.activeTurn && session.activeTurn.res === res) {
+          sendSse(res, 'error', { message: err.message || 'Erro no turno ACP.' });
+          finishActiveTurn(session);
+        }
       }
       return;
     }
 
-    // Abort / stop active turn
+    // Instant cancel active turn via ACP `session/cancel` (keeps ACP process & session warm!)
     const abortMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/abort$/);
     if (req.method === 'POST' && abortMatch) {
       const session = sessions.get(abortMatch[1]);
       if (!session) return sendJson(res, 404, { error: 'Sessão não encontrada.' });
+      if (session.pendingPermissions) {
+        for (const entry of session.pendingPermissions.values()) {
+          try { entry.cancel(); } catch {}
+        }
+        session.pendingPermissions.clear();
+      }
+      if (session.acpClient?.alive && session.acpSessionId) {
+        session.acpClient.cancel(session.acpSessionId);
+      }
       if (session.activeTurn) {
         sendSse(session.activeTurn.res, 'aborted', { message: 'Geração interrompida pelo usuário.' });
         finishActiveTurn(session);
       }
-      closeSessionProcess(session);
-      return sendJson(res, 200, { aborted: true });
+      return sendJson(res, 200, { aborted: true, warm: Boolean(session.acpClient?.alive) });
     }
 
     // Close/delete session
@@ -1378,6 +1603,10 @@ function cleanupAll() {
     closeSessionProcess(session);
   }
   sessions.clear();
+  for (const client of acpClients.values()) {
+    try { client.destroy(); } catch {}
+  }
+  acpClients.clear();
 }
 
 process.on('SIGINT', () => {
