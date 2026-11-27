@@ -85,17 +85,20 @@ Se você tiver o plugin [Obsidian Prism](https://github.com/RMvdesi/obsidian-pri
 
 ---
 
-## ⌨️ Atalhos úteis
+## ⌨️ Comandos & Atalhos (`agy` parity)
 
-| Atalho | Ação |
+| Comando / Atalho | Ação |
 | :--- | :--- |
-| `Enter` | Enviar mensagem (ou **enfileirar** se o agente estiver trabalhando) |
-| `Ctrl + Enter` | **Interromper e enviar agora** enquanto o agente trabalha |
-| `Shift + Enter` | Quebra de linha no composer |
-| `Ctrl + S` | Salvar o System Prompt atual no `agent.md` |
-| `Ctrl + K` | Iniciar nova conversa limpa |
-| `/` | Abrir menu de Slash Commands |
-| `Esc` | Fechar popovers e modais |
+| `/goal <objetivo>` | Execução autônoma até concluir e verificar o objetivo completo |
+| `/boost <tarefa>` | Raciocínio profundo (eleva esforço para `Extra High` + revisão rigorosa) |
+| `/btw <pergunta>` | Pergunta paralela rápida via ACP sem interromper ou poluir o chat principal |
+| `/plan`, `/grill-me`, `/learn` | Fluxos nativos do `agy acp` |
+| `/compact`, `/fork`, `/rewind`, `/rename`, `/copy` | Gestão completa de contexto e ramificações de conversa |
+| `/voice` / `Alt + R` / 🎙️ | Ditado por voz em tempo real (`pt-BR` / `en-US`) com equalizador ao vivo |
+| `Shift + Tab` | Alterna permissões ao vivo (`Completo` → `Perguntar` → `Editar` → `Planejar`) |
+| `Enter` / `Ctrl + Enter` | Enviar (ou enfileirar) / Interromper e enviar agora (*Steer*) |
+| `Alt + M / S / V / P / H` | Abrir Modelos / Skills / Contexto / Alternar System Prompt / Ajuda |
+| `Ctrl + S` / `Ctrl + K` | Salvar System Prompt / Nova conversa limpa |
 
 ---
 

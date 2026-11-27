@@ -365,6 +365,22 @@
                 </div>
               </div>
 
+              <!-- Ephemeral `/btw` Side Question Card (Never pollutes or interrupts main chat!) -->
+              <div class="btw-card hidden" id="btwCard">
+                <div class="btw-head">
+                  <div class="btw-head-left">
+                    <span class="btw-badge mono">/btw</span>
+                    <span class="btw-question" id="btwQuestionLabel"></span>
+                  </div>
+                  <div class="btw-head-actions">
+                    <span class="mono" style="font-size:10.5px; color:var(--muted-foreground);" id="btwMetaLabel"></span>
+                    <button type="button" class="opt-btn opt-btn-xs" id="btwCopyBtn">Copiar</button>
+                    <button type="button" class="icon-mini-btn" id="btwCloseBtn" title="Fechar">✕</button>
+                  </div>
+                </div>
+                <div class="btw-body md" id="btwBody"></div>
+              </div>
+
               <!-- Queued Messages Card (Obsidian Prism style — sits right above composer; pets leap onto it!) -->
               <div class="queued-messages-card hidden" id="queuedMessagesCard">
                 <div class="queued-head" id="queuedHead">
@@ -384,6 +400,25 @@
               <div class="surface-composer-card" id="composerCard" data-ag-cs-prism-box="1" data-testid="agent-input-box">
                 <!-- REAL Obsidian Prism Dual / Quad Mascot Stage (Whale + Dragon + Clawd + Cat) -->
                 <div class="ag-cs-crab ag-cs-dual-stage" id="mascotStage" data-mascot-stage="true" aria-hidden="true"></div>
+
+                <!-- Live Voice Dictation Indicator Bar (Real-time SpeechRecognition + Web Audio waveform) -->
+                <div class="voice-live-bar hidden" id="voiceLiveBar">
+                  <div class="voice-live-left">
+                    <span class="voice-rec-dot"></span>
+                    <span class="voice-live-label">Ouvindo (<span id="voiceLangLabel" class="mono">pt-BR</span>)</span>
+                    <span class="voice-timer mono" id="voiceTimerLabel">0:00</span>
+                    <div class="voice-eq" id="voiceEqBars" aria-hidden="true">
+                      <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                    </div>
+                    <span class="voice-interim" id="voiceInterimLabel"></span>
+                  </div>
+                  <div class="voice-live-actions">
+                    <button type="button" class="opt-btn opt-btn-xs" id="voiceLangBtn" title="Alternar idioma (pt-BR / en-US)">pt-BR</button>
+                    <button type="button" class="opt-btn opt-btn-xs" id="voiceCancelBtn" title="Descartar gravação">✕</button>
+                    <button type="button" class="opt-btn opt-btn-xs" id="voiceStopBtn" title="Parar e manter texto">Parar</button>
+                    <button type="button" class="btn btn-prism btn-xs" id="voiceSendBtn" title="Parar e enviar agora">Enviar ↑</button>
+                  </div>
+                </div>
 
                 <div class="active-skills-strip hidden" id="activeSkillsStrip"></div>
                 <div class="pending-attachments hidden" id="pendingAttachments"></div>
@@ -445,6 +480,15 @@
                         </svg>
                         <span id="liveCtxPct">0%</span>
                       </span>
+                    </button>
+
+                    <!-- Live Voice Dictation Mic Button (Alt+R or /voice) -->
+                    <button type="button" id="voiceMicBtn" class="voice-mic-btn" title="Ditar por voz em tempo real (Alt+R ou /voice)" aria-pressed="false">
+                      <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="5.5" y="1.8" width="5" height="8.2" rx="2.5"/>
+                        <path d="M3.2 7.8a4.8 4.8 0 0 0 9.6 0"/>
+                        <path d="M8 12.6v2.1M5.6 14.7h4.8"/>
+                      </svg>
                     </button>
 
                     <!-- While streaming + text typed: Queue (Enter) or Steer/Send Now (Ctrl+Enter) -->
@@ -617,6 +661,55 @@
             <button type="button" class="btn btn-prism" id="acctSaveBtn">Salvar perfil</button>
           </div>
         </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- Commands & Keyboard Shortcuts Help Modal (`/help` or Alt+H) -->
+  <div class="modal-backdrop hidden" id="helpModal">
+    <div class="modal-card help-modal-card">
+      <div class="modal-header">
+        <h3>⌨️ Comandos &amp; Atalhos · Obsidian Studio (agy ACP)</h3>
+        <button id="closeHelpBtn" class="icon-mini-btn" type="button">✕</button>
+      </div>
+      <div class="modal-body help-grid">
+        <div class="help-col">
+          <div class="help-sec-title mono">RACIOCÍNIO &amp; FLUXO</div>
+          <div class="help-row"><code class="mono">/goal &lt;objetivo&gt;</code><span>Modo autônomo até verificar conclusão total</span></div>
+          <div class="help-row"><code class="mono">/boost &lt;tarefa&gt;</code><span>Raciocínio profundo (eleva esforço p/ Extra)</span></div>
+          <div class="help-row"><code class="mono">/plan &lt;tarefa&gt;</code><span>Planejamento estruturado nativo do ACP</span></div>
+          <div class="help-row"><code class="mono">/grill-me &lt;tarefa&gt;</code><span>Entrevista 1 pergunta por vez antes de codar</span></div>
+          <div class="help-row"><code class="mono">/learn &lt;regra&gt;</code><span>Transforma correção em regra/skill persistente</span></div>
+          <div class="help-row"><code class="mono">/btw &lt;pergunta&gt;</code><span>Pergunta paralela sem interromper o chat</span></div>
+          <div class="help-sec-title mono" style="margin-top:12px;">CONVERSA &amp; CONTEXTO</div>
+          <div class="help-row"><code class="mono">/compact [foco]</code><span>Compacta o contexto numa nova sessão ACP</span></div>
+          <div class="help-row"><code class="mono">/fork</code><span>Clona esta conversa em um novo ramo</span></div>
+          <div class="help-row"><code class="mono">/rewind [n]</code><span>Volta os últimos N turnos (ou /undo)</span></div>
+          <div class="help-row"><code class="mono">/rename &lt;nome&gt;</code><span>Renomeia a conversa atual na barra lateral</span></div>
+          <div class="help-row"><code class="mono">/copy [n|btw]</code><span>Copia a última resposta, a N-ésima ou o /btw</span></div>
+          <div class="help-row"><code class="mono">/clear</code><span>Inicia nova conversa limpa (ou /new)</span></div>
+        </div>
+        <div class="help-col">
+          <div class="help-sec-title mono">CONTROLES AO VIVO (ACP)</div>
+          <div class="help-row"><code class="mono">/model [nome]</code><span>Abre picker ou troca modelo ao vivo (ex: neon, opus)</span></div>
+          <div class="help-row"><code class="mono">/effort &lt;nível&gt;</code><span>low · medium · high · xhigh (extra) ao vivo</span></div>
+          <div class="help-row"><code class="mono">/permissions [modo]</code><span>full · ask · accept-edits · plan ao vivo</span></div>
+          <div class="help-row"><code class="mono">/skills [reload]</code><span>Abre seletor de skills ou recarrega do disco</span></div>
+          <div class="help-row"><code class="mono">/agents</code><span>Abre seletor de agentes nativos e .md</span></div>
+          <div class="help-row"><code class="mono">/context</code><span>Abre o tubo físico 512K/1M (ou /vial, /usage)</span></div>
+          <div class="help-row"><code class="mono">/accounts</code><span>Gerenciar contas &amp; reconectar mantendo contexto</span></div>
+          <div class="help-row"><code class="mono">/prompt</code><span>Abre/foca o editor de System Prompt</span></div>
+          <div class="help-row"><code class="mono">/export</code><span>Exporta a conversa atual em Markdown (.md)</span></div>
+          <div class="help-row"><code class="mono">/voice</code><span>Liga/desliga ditado por voz ao vivo (ou /record)</span></div>
+          <div class="help-sec-title mono" style="margin-top:12px;">ATALHOS DE TECLADO</div>
+          <div class="help-row"><kbd>Shift + Tab</kbd><span>Alterna modo de permissões ao vivo</span></div>
+          <div class="help-row"><kbd>Enter</kbd><span>Envia (ou enfileira se agente trabalhando)</span></div>
+          <div class="help-row"><kbd>Ctrl + Enter</kbd><span>Interrompe e envia direto (Steer)</span></div>
+          <div class="help-row"><kbd>Alt + R</kbd><span>Gravar e transcrever voz ao vivo</span></div>
+          <div class="help-row"><kbd>Alt + M / S / V</kbd><span>Abre Modelos / Skills / Contexto</span></div>
+          <div class="help-row"><kbd>Alt + P / H</kbd><span>Alterna System Prompt / Abre esta Ajuda</span></div>
+          <div class="help-row"><kbd>Ctrl + K / S</kbd><span>Nova conversa / Salvar System Prompt</span></div>
+        </div>
       </div>
     </div>
   </div>

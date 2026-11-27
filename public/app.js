@@ -92,14 +92,29 @@ const PROMPT_TEMPLATES = [
 ];
 
 const SLASH_COMMANDS = [
-  { cmd: '/prompt', desc: 'Abrir / focar editor de System Prompt' },
-  { cmd: '/clear', desc: 'Iniciar nova conversa limpa' },
-  { cmd: '/vial', desc: 'Abrir 512K Physical Water Vial' },
-  { cmd: '/models', desc: 'Abrir seletor de modelos e esforço' },
-  { cmd: '/export', desc: 'Baixar esta conversa em Markdown (.md)' },
-  { cmd: '/effort xhigh', desc: 'Gemini 4 Neon · Extra High' },
-  { cmd: '/effort high', desc: 'Gemini 4 Neon · High' },
-  { cmd: '/effort medium', desc: 'Gemini 4 Neon · Medium' },
+  { cmd: '/goal', desc: 'Execução autônoma até verificar objetivo completo', needsArg: true, tag: 'agy' },
+  { cmd: '/boost', desc: 'Raciocínio profundo (Extra High + verificação rigorosa)', needsArg: true, tag: 'agy' },
+  { cmd: '/btw', desc: 'Pergunta paralela sem interromper o chat principal', needsArg: true, tag: 'agy' },
+  { cmd: '/plan', desc: 'Explorar e montar plano estruturado antes de agir', needsArg: true, tag: 'acp' },
+  { cmd: '/grill-me', desc: 'Entrevista rápida 1 pergunta por vez p/ alinhar plano', needsArg: true, tag: 'acp' },
+  { cmd: '/learn', desc: 'Capturar correção da sessão como regra/skill persistente', needsArg: true, tag: 'acp' },
+  { cmd: '/compact', desc: 'Compactar histórico da conversa e liberar contexto', needsArg: false, tag: 'agy' },
+  { cmd: '/fork', desc: 'Clonar esta conversa em um novo ramo na barra lateral', needsArg: false, tag: 'agy' },
+  { cmd: '/rewind', desc: 'Voltar o último turno e editar o prompt (/undo)', needsArg: false, tag: 'agy' },
+  { cmd: '/rename', desc: 'Renomear esta conversa na barra lateral', needsArg: true, tag: 'agy' },
+  { cmd: '/copy', desc: 'Copiar última resposta (/copy 2 ou /copy btw)', needsArg: false, tag: 'agy' },
+  { cmd: '/model', desc: 'Abrir picker ou trocar modelo ao vivo (ex: /model opus)', needsArg: false, tag: 'acp' },
+  { cmd: '/effort', desc: 'Trocar esforço ao vivo (low|medium|high|xhigh)', needsArg: true, tag: 'acp' },
+  { cmd: '/permissions', desc: 'Trocar permissões ao vivo (full|ask|accept-edits|plan)', needsArg: false, tag: 'acp' },
+  { cmd: '/skills', desc: 'Abrir seletor de skills instaladas (/skills reload)', needsArg: false, tag: 'acp' },
+  { cmd: '/agents', desc: 'Abrir seletor de agentes nativos e .md', needsArg: false, tag: 'studio' },
+  { cmd: '/context', desc: 'Abrir 512K/1M Physical Water Vial (/vial, /usage)', needsArg: false, tag: 'studio' },
+  { cmd: '/accounts', desc: 'Gerenciar contas Antigravity (/login, /logout)', needsArg: false, tag: 'studio' },
+  { cmd: '/prompt', desc: 'Abrir / focar editor de System Prompt', needsArg: false, tag: 'studio' },
+  { cmd: '/clear', desc: 'Iniciar nova conversa limpa (/new)', needsArg: false, tag: 'agy' },
+  { cmd: '/export', desc: 'Baixar esta conversa em Markdown (.md)', needsArg: false, tag: 'studio' },
+  { cmd: '/voice', desc: 'Gravar e transcrever voz em tempo real (Alt+R / /record)', needsArg: false, tag: 'agy' },
+  { cmd: '/help', desc: 'Ver todos os comandos e atalhos de teclado (Alt+H)', needsArg: false, tag: 'agy' },
 ];
 
 const PREFS_KEY = 'neon_obsidian_prism_prefs_v2';
@@ -153,6 +168,7 @@ const state = {
   activeCwd: '',
   activeMode: 'full',
   contextSize: MAX_CONTEXT_TOKENS,
+  lastBtwAnswer: '',
   skills: [],
   skillsFilter: 'all',
   pinnedSkillsByAgent: (() => {
@@ -298,6 +314,24 @@ const el = {
   skillsPopoverList: document.getElementById('skillsPopoverList'),
   clearPinnedSkillsBtn: document.getElementById('clearPinnedSkillsBtn'),
   activeSkillsStrip: document.getElementById('activeSkillsStrip'),
+  btwCard: document.getElementById('btwCard'),
+  btwQuestionLabel: document.getElementById('btwQuestionLabel'),
+  btwMetaLabel: document.getElementById('btwMetaLabel'),
+  btwBody: document.getElementById('btwBody'),
+  btwCopyBtn: document.getElementById('btwCopyBtn'),
+  btwCloseBtn: document.getElementById('btwCloseBtn'),
+  helpModal: document.getElementById('helpModal'),
+  closeHelpBtn: document.getElementById('closeHelpBtn'),
+  voiceMicBtn: document.getElementById('voiceMicBtn'),
+  voiceLiveBar: document.getElementById('voiceLiveBar'),
+  voiceLangLabel: document.getElementById('voiceLangLabel'),
+  voiceLangBtn: document.getElementById('voiceLangBtn'),
+  voiceTimerLabel: document.getElementById('voiceTimerLabel'),
+  voiceEqBars: document.getElementById('voiceEqBars'),
+  voiceInterimLabel: document.getElementById('voiceInterimLabel'),
+  voiceCancelBtn: document.getElementById('voiceCancelBtn'),
+  voiceStopBtn: document.getElementById('voiceStopBtn'),
+  voiceSendBtn: document.getElementById('voiceSendBtn'),
   telemetryTrigger: document.getElementById('telemetryTrigger'),
   liveTpsLabel: document.getElementById('liveTpsLabel'),
   liveCacheLabel: document.getElementById('liveCacheLabel'),
@@ -785,15 +819,19 @@ function togglePopover(key) {
 // ── Real Prefs, Palettes, & Mascots Sync ──────────────────────────────────────
 function syncMascotsNow() {
   const info = resolveModelInfo(state.activeModel);
-  const queueVisible = el.queuedMessagesCard && !el.queuedMessagesCard.classList.contains('hidden');
-  const leapY = queueVisible ? Math.max(44, (el.queuedMessagesCard.offsetHeight || 0) + 8) : 0;
+  const qVis = el.queuedMessagesCard && !el.queuedMessagesCard.classList.contains('hidden');
+  const bVis = el.btwCard && !el.btwCard.classList.contains('hidden');
+  let stackH = 0;
+  if (qVis) stackH += (el.queuedMessagesCard.offsetHeight || 0) + 8;
+  if (bVis) stackH += (el.btwCard.offsetHeight || 0) + 8;
+  const leapY = stackH > 0 ? Math.max(44, stackH) : 0;
   prism?.syncMascots({
     camp: info.camp,
     mascot: state.prefs.petMode, // 'quad' (4) | 'crab' (2) | 'off' (0)
     streaming: state.streaming,
     streamTier: info.effort === 'xhigh' || info.effort === 'high' || info.isOrchestrator ? 3 : 2,
     hasError: false,
-    yieldMode: queueVisible ? 'leap' : 'none',
+    yieldMode: stackH > 0 ? 'leap' : 'none',
     leapOffsetY: leapY,
     orchestrator: info.isOrchestrator,
   });
@@ -2087,16 +2125,303 @@ async function abortCurrentTurn({ isSteer = false } = {}) {
   }
 }
 
+function openHelpModal() {
+  closeAllPopovers();
+  el.helpModal?.classList.remove('hidden');
+  prism?.animatePopoverIn(el.helpModal?.querySelector('.modal-card'));
+}
+
+async function runBtwSideQuery(question) {
+  if (!question) {
+    setChatInputText('/btw ');
+    el.chatInput.focus();
+    return;
+  }
+  el.btwCard.classList.remove('hidden');
+  el.btwQuestionLabel.textContent = question;
+  el.btwMetaLabel.textContent = 'pensando…';
+  el.btwBody.innerHTML = '<p style="color:var(--muted-foreground);">Consultando em paralelo via ACP…</p>';
+  prism?.animatePopoverIn(el.btwCard);
+  requestAnimationFrame(() => syncMascotsNow());
+
+  try {
+    const recentCtx = state.messages
+      .filter((m) => !m.error && m.text)
+      .slice(-6)
+      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.text).slice(0, 800)}`)
+      .join('\n\n');
+    const res = await api('/api/btw', {
+      method: 'POST',
+      body: JSON.stringify({
+        question,
+        context: recentCtx,
+        model: state.activeModel,
+        cwd: state.activeCwd,
+        agentName: state.currentSlug,
+      }),
+    });
+    state.lastBtwAnswer = res.answer || '';
+    el.btwMetaLabel.textContent = `${res.durationSec || 0}s · ACP`;
+    const { html, codeBlocks } = renderMarkdown(state.lastBtwAnswer);
+    el.btwBody.innerHTML = html;
+    bindMarkdownInteractions(el.btwBody, codeBlocks);
+  } catch (err) {
+    el.btwMetaLabel.textContent = 'erro';
+    el.btwBody.innerHTML = `<p style="color:var(--error);">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function runCompactCommand(focusText = '') {
+  if (!state.messages.some((m) => !m.error && m.text)) {
+    toast('Ainda não há histórico para compactar.', 'warn');
+    return;
+  }
+  await closeCurrentSession();
+  state.agyConversationId = null;
+  state.needsContextSeed = true;
+  setStatus('Contexto compactado', 'idle');
+  toast(
+    focusText
+      ? 'Sessão ACP reiniciada com checkpoint compactado — enviando sua continuação…'
+      : 'Contexto compactado! Próxima mensagem abre sessão ACP limpa com resumo preservado.',
+    'ok'
+  );
+  if (focusText) {
+    await sendMessage(focusText);
+  }
+}
+
+async function runForkCommand() {
+  if (!state.messages.length) {
+    toast('Nenhuma mensagem para bifurcar ainda.', 'warn');
+    return;
+  }
+  await persistCurrentConversation();
+  const prevTitle = state.conversations.find((c) => c.id === state.currentConvId)?.title || 'Conversa';
+  state.currentConvId = crypto.randomUUID ? crypto.randomUUID() : `conv-${Date.now()}`;
+  state.agyConversationId = null;
+  state.needsContextSeed = true;
+  await closeCurrentSession();
+  await api('/api/conversations', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: state.currentConvId,
+      title: `${prevTitle} (fork)`.slice(0, 120),
+      agentName: state.currentSlug,
+      model: state.activeModel,
+      cwd: state.activeCwd,
+      permissionMode: state.activeMode,
+      agyConversationId: null,
+      messages: state.messages,
+      lastUsage: state.lastUsage,
+    }),
+  });
+  await refreshConversations();
+  toast('Conversa clonada (fork) mantendo todo o histórico!', 'ok');
+}
+
+async function runRewindCommand(countRaw) {
+  const n = Math.max(1, Math.min(10, parseInt(countRaw || '1', 10) || 1));
+  let removed = 0;
+  let restoredPrompt = '';
+  while (removed < n && state.messages.length > 0) {
+    if (state.messages[state.messages.length - 1].role === 'assistant') state.messages.pop();
+    if (state.messages.length && state.messages[state.messages.length - 1].role === 'user') {
+      restoredPrompt = state.messages.pop().text || restoredPrompt;
+    }
+    removed += 1;
+  }
+  await closeCurrentSession();
+  state.agyConversationId = null;
+  state.needsContextSeed = state.messages.some((m) => !m.error && m.text);
+  renderChatMessages();
+  await persistCurrentConversation();
+  if (restoredPrompt) {
+    setChatInputText(restoredPrompt);
+    el.chatInput.focus();
+  }
+  toast(`Voltou ${removed} turno${removed > 1 ? 's' : ''} — edite e reenvie.`, 'ok');
+}
+
+async function runCopyCommand(arg = '') {
+  const clean = arg.trim().toLowerCase();
+  if (clean === 'btw') {
+    if (!state.lastBtwAnswer) return toast('Nenhuma resposta /btw para copiar.', 'warn');
+    await navigator.clipboard.writeText(state.lastBtwAnswer);
+    return toast('Resposta /btw copiada!', 'ok');
+  }
+  const assistants = state.messages.filter((m) => m.role === 'assistant' && m.text);
+  if (!assistants.length) return toast('Nenhuma resposta do agente para copiar.', 'warn');
+  const nth = Math.max(1, parseInt(clean || '1', 10) || 1);
+  const target = assistants[assistants.length - nth] || assistants[assistants.length - 1];
+  await navigator.clipboard.writeText(target.text);
+  toast(nth === 1 ? 'Última resposta copiada!' : `${nth}ª resposta mais recente copiada!`, 'ok');
+}
+
+async function runRenameCommand(newTitle) {
+  const title = newTitle.trim().slice(0, 120);
+  if (!title) {
+    setChatInputText('/rename ');
+    el.chatInput.focus();
+    return;
+  }
+  if (!state.currentConvId) await persistCurrentConversation();
+  if (!state.currentConvId) return toast('Envie uma mensagem antes de renomear.', 'warn');
+  await api(`/api/conversations/${encodeURIComponent(state.currentConvId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  });
+  await refreshConversations();
+  toast(`Conversa renomeada para "${title}"`, 'ok');
+}
+
+function matchModelShorthand(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const aliases = [
+    ['neon', 'gemini-4-neon'],
+    ['carbon', 'gemini-4-carbon'],
+    ['argon', 'gemini-4-argon'],
+    ['hydrogen', 'gemini-4-hydrogen'],
+    ['orch', 'orchestrator'],
+    ['orchestrator', 'orchestrator'],
+    ['flash', 'gemini-3.8-flash'],
+    ['opus', 'claude-opus-5-5'],
+    ['sonnet', 'claude-sonnet-5-5'],
+  ];
+  for (const [key, famId] of aliases) {
+    if (q === key || q.includes(key)) return famId;
+  }
+  return null;
+}
+
+// Handles immediate UI/session slash commands (can even run while streaming!)
+// Returns true if fully handled locally; returns false if it should be sent as a chat prompt.
 function executeSlashCommand(raw) {
-  const cmd = raw.trim().toLowerCase();
-  if (cmd === '/prompt') { state.prefs.viewMode = 'studio'; applyPrefs(); el.systemPromptEditor.focus(); return true; }
-  if (cmd === '/clear') { startFreshSession({ clearMessages: true }); return true; }
-  if (cmd === '/vial') { togglePopover('vialPopover'); return true; }
-  if (cmd === '/models') { togglePopover('modelPopover'); return true; }
-  if (cmd === '/export') { exportConversationMarkdown(); return true; }
-  const eff = cmd.match(/^\/effort\s+(low|medium|high|xhigh)$/);
-  if (eff) { selectEffort(eff[1], true); return true; }
+  const trimmed = raw.trim();
+  const m = trimmed.match(/^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i);
+  if (!m) return false;
+  const name = m[1].toLowerCase();
+  const arg = (m[2] || '').trim();
+
+  if (name === 'prompt') { state.prefs.viewMode = 'studio'; applyPrefs(); el.systemPromptEditor.focus(); return true; }
+  if (name === 'clear' || name === 'new') { startFreshSession({ clearMessages: true }); toast('Nova conversa iniciada!', 'ok'); return true; }
+  if (name === 'vial' || name === 'context' || name === 'usage' || name === 'quota') { togglePopover('vialPopover'); return true; }
+  if (name === 'agents') { togglePopover('agentPopover'); return true; }
+  if (name === 'accounts' || name === 'login' || name === 'logout') { el.openAccountsBtn?.click(); return true; }
+  if (name === 'export') { exportConversationMarkdown(); return true; }
+  if (name === 'help') { openHelpModal(); return true; }
+  if (name === 'voice' || name === 'record') {
+    if (arg && /^(pt|en|es)/i.test(arg)) setVoiceLang(arg);
+    toggleVoiceDictation();
+    return true;
+  }
+  if (name === 'btw') { runBtwSideQuery(arg); return true; }
+  if (name === 'copy') { runCopyCommand(arg); return true; }
+  if (name === 'rename') { runRenameCommand(arg); return true; }
+  if (name === 'fork' || name === 'branch') { runForkCommand(); return true; }
+  if (name === 'rewind' || name === 'undo') { runRewindCommand(arg); return true; }
+  if (name === 'compact') { runCompactCommand(arg); return true; }
+
+  if (name === 'skills') {
+    if (arg.toLowerCase() === 'reload') {
+      loadInstalledSkills().then(() => toast(`Skills recarregadas (${state.skills.length})!`, 'ok'));
+    } else {
+      togglePopover('skillsPopover');
+    }
+    return true;
+  }
+
+  if (name === 'model' || name === 'models') {
+    if (!arg) { togglePopover('modelPopover'); return true; }
+    const famId = matchModelShorthand(arg);
+    if (famId) { selectModelFamily(famId); return true; }
+    toast(`Modelo "${arg}" não reconhecido. Abrindo seletor…`, 'warn');
+    togglePopover('modelPopover');
+    return true;
+  }
+
+  if (name === 'effort') {
+    const norm = arg.toLowerCase() === 'extra' || arg.toLowerCase() === 'max' ? 'xhigh' : arg.toLowerCase();
+    if (['low', 'medium', 'high', 'xhigh'].includes(norm)) {
+      selectEffort(norm, true);
+      return true;
+    }
+    togglePopover('modelPopover');
+    return true;
+  }
+
+  if (name === 'permissions' || name === 'mode') {
+    const modeMap = { full: 'full', completo: 'full', ask: 'ask', default: 'ask', perguntar: 'ask', 'accept-edits': 'accept-edits', editar: 'accept-edits', plan: 'plan', planejar: 'plan' };
+    if (arg && modeMap[arg.toLowerCase()]) {
+      state.activeMode = modeMap[arg.toLowerCase()];
+      syncModeUI();
+      syncLiveSessionConfig();
+      toast(`Permissões (ACP ao vivo): ${el.modeTriggerLabel.textContent}`, 'ok');
+      return true;
+    }
+    togglePopover('modePopover');
+    return true;
+  }
+
+  if (name === 'plan' && !arg) {
+    state.activeMode = 'plan';
+    syncModeUI();
+    syncLiveSessionConfig();
+    toast('Modo Planejar (somente leitura) ativado via ACP!', 'ok');
+    return true;
+  }
+
+  // Commands that require an argument to be sent as an enriched ACP turn
+  if ((name === 'goal' || name === 'boost') && !arg) {
+    setChatInputText(`/${name} `);
+    el.chatInput.focus();
+    toast(`Digite o objetivo após /${name}`, 'warn');
+    return true;
+  }
+
   return false;
+}
+
+// Transform `/goal <objective>` and `/boost <task>` into enriched ACP autonomous/deep instructions
+async function expandPromptSlashWorkflow(rawContent) {
+  const goalMatch = rawContent.match(/^\/goal\s+([\s\S]+)$/i);
+  if (goalMatch) {
+    const objective = goalMatch[1].trim();
+    return {
+      displayText: rawContent,
+      workflowTag: 'GOAL',
+      promptText:
+        `[MODO /goal — EXECUÇÃO AUTÔNOMA ATÉ VERIFICAÇÃO COMPLETA]\n` +
+        `Objetivo final: ${objective}\n\n` +
+        `Diretrizes obrigatórias do modo /goal:\n` +
+        `1. Trabalhe de ponta a ponta até o objetivo estar 100% concluído e verificado (não pare no meio pedindo confirmações desnecessárias).\n` +
+        `2. Rode testes, builds e verificações reais após cada alteração; se algo falhar, diagnostique e corrija antes de concluir.\n` +
+        `3. Só finalize quando puder comprovar objetivamente que todos os critérios do objetivo foram atendidos (ou relate claramente um bloqueio externo real).\n`,
+    };
+  }
+
+  const boostMatch = rawContent.match(/^\/boost\s+([\s\S]+)$/i);
+  if (boostMatch) {
+    const task = boostMatch[1].trim();
+    const info = resolveModelInfo(state.activeModel);
+    if (!info.isOrchestrator && info.family?.efforts?.includes('xhigh') && info.effort !== 'xhigh') {
+      await selectEffort('xhigh', false);
+    }
+    return {
+      displayText: rawContent,
+      workflowTag: 'BOOST',
+      promptText:
+        `[MODO /boost — RACIOCÍNIO PROFUNDO, MÚLTIPLAS PERSPECTIVAS E VERIFICAÇÃO RIGOROSA]\n` +
+        `Tarefa: ${task}\n\n` +
+        `Diretrizes obrigatórias do modo /boost:\n` +
+        `1. Analise arquitetura, casos de borda, trade-offs e riscos antes de implementar.\n` +
+        `2. Execute a melhor solução completa sem atalhos ou placeholders.\n` +
+        `3. Revise criticamente a própria implementação e valide com testes/checagens reais.\n`,
+    };
+  }
+
+  return { displayText: rawContent, workflowTag: null, promptText: rawContent };
 }
 
 function updateSlashMenu() {
@@ -2106,26 +2431,27 @@ function updateSlashMenu() {
   const skillCmds = (state.skills || []).map((s) => ({
     cmd: `/${s.name}`,
     desc: String(s.description || `Skill (${s.source})`).slice(0, 68),
-    isAcp: true,
+    needsArg: true,
+    tag: s.source,
   }));
   const acpCmds = (state.acpCommands || [])
     .filter((c) => c && c.name)
-    .map((c) => ({ cmd: `/${c.name}`, desc: String(c.description || '').slice(0, 68), isAcp: true }));
+    .map((c) => ({ cmd: `/${c.name}`, desc: String(c.description || '').slice(0, 68), needsArg: true, tag: 'acp' }));
   const mergedMap = new Map();
   for (const item of [...SLASH_COMMANDS, ...skillCmds, ...acpCmds]) {
     const k = item.cmd.toLowerCase();
     if (!mergedMap.has(k)) mergedMap.set(k, item);
   }
-  const matches = Array.from(mergedMap.values()).filter((c) => c.cmd.toLowerCase().startsWith(q)).slice(0, 16);
+  const matches = Array.from(mergedMap.values()).filter((c) => c.cmd.toLowerCase().startsWith(q)).slice(0, 18);
   if (!matches.length) { el.slashMenu.classList.add('hidden'); return; }
   state.slashIndex = Math.min(state.slashIndex, matches.length - 1);
   el.slashMenu.innerHTML = matches
-    .map((c, i) => `<button type="button" class="slash-item ${i === state.slashIndex ? 'active' : ''}" data-cmd="${escapeHtml(c.cmd)}" data-is-acp="${c.isAcp ? '1' : '0'}"><span class="slash-cmd mono">${escapeHtml(c.cmd)}</span><span class="slash-desc">${escapeHtml(c.desc)}</span></button>`)
+    .map((c, i) => `<button type="button" class="slash-item ${i === state.slashIndex ? 'active' : ''}" data-cmd="${escapeHtml(c.cmd)}" data-needs-arg="${c.needsArg ? '1' : '0'}"><span class="slash-cmd mono">${escapeHtml(c.cmd)}</span><span class="slash-desc">${escapeHtml(c.desc)}</span></button>`)
     .join('');
   el.slashMenu.querySelectorAll('.slash-item').forEach((btn) => {
     btn.addEventListener('click', () => {
       el.slashMenu.classList.add('hidden');
-      if (btn.dataset.isAcp === '1') {
+      if (btn.dataset.needsArg === '1') {
         setChatInputText(`${btn.dataset.cmd} `);
         el.chatInput.focus();
       } else {
@@ -2143,6 +2469,14 @@ function updateSlashMenu() {
 async function sendMessage(overrideText = null, overrideAttachments = null) {
   const rawContent = overrideText !== null ? overrideText : getChatInputText().trim();
   if (!rawContent) return;
+
+  // Immediate local/parallel commands (like `/btw`, `/copy`, `/help`, `/model`, `/skills`) work even while streaming!
+  if (rawContent.startsWith('/') && executeSlashCommand(rawContent)) {
+    el.slashMenu.classList.add('hidden');
+    if (overrideText === null) { setChatInputText(''); syncComposerActionButtons(); }
+    return;
+  }
+
   if (state.streaming) {
     if (overrideText === null) enqueueFromComposer();
     return;
@@ -2150,15 +2484,13 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
 
   el.slashMenu.classList.add('hidden');
   closeAllPopovers();
-  if (rawContent.startsWith('/') && executeSlashCommand(rawContent)) {
-    setChatInputText('');
-    return;
-  }
 
   if (state.dirty && !state.sessionStarted) {
     const ok = await saveCurrentAgent({ restartSession: false });
     if (!ok) return;
   }
+
+  const expanded = await expandPromptSlashWorkflow(rawContent);
 
   let sessionId;
   try { sessionId = await ensureSession(); }
@@ -2179,14 +2511,19 @@ async function sendMessage(overrideText = null, overrideAttachments = null) {
     (!state.agyConversationId && priorMessagesSnapshot.some((m) => !m.error && String(m.text || '').trim().length > 0));
   const contextSeed = shouldSeedContext ? buildConversationContextSeed(priorMessagesSnapshot) : '';
 
-  let payloadContent = rawContent;
+  let payloadContent = expanded.promptText;
   const imageAttachments = attachments.filter((a) => String(a.mime || '').startsWith('image/'));
   const fileAttachments = attachments.filter((a) => !String(a.mime || '').startsWith('image/'));
   if (fileAttachments.length) {
-    payloadContent = `${rawContent}\n\n[Arquivos anexados pelo usuário — use view_file se precisar inspecioná-los:\n${fileAttachments.map((a) => `- ${a.name} (${a.path})`).join('\n')}]`;
+    payloadContent = `${payloadContent}\n\n[Arquivos anexados pelo usuário — use view_file se precisar inspecioná-los:\n${fileAttachments.map((a) => `- ${a.name} (${a.path})`).join('\n')}]`;
   }
   if (contextSeed) {
     payloadContent = `${contextSeed}\n\n[NOVA MENSAGEM DO USUÁRIO]\n${payloadContent}`;
+  }
+  if (expanded.workflowTag === 'GOAL') {
+    toast('🎯 Modo /goal ativo — executando autonomamente até verificar conclusão.', 'ok');
+  } else if (expanded.workflowTag === 'BOOST') {
+    toast('⚡ Modo /boost ativo — raciocínio profundo (Extra High).', 'ok');
   }
 
   // Trigger real Obsidian Prism liftoff burst + WebGL2 Conversation Neon Aura surge!
@@ -2585,20 +2922,65 @@ function bindEvents() {
     toast('Nova sessão iniciada!', 'ok');
   });
 
-  // Global keyboard shortcuts
+  // Global keyboard shortcuts (Obsidian Studio + agy CLI parity!)
+  const PERM_CYCLE = ['full', 'ask', 'accept-edits', 'plan'];
   window.addEventListener('keydown', (e) => {
+    if (e.shiftKey && e.key === 'Tab') {
+      const inEditor = document.activeElement === el.systemPromptEditor;
+      if (!inEditor) {
+        e.preventDefault();
+        const idx = PERM_CYCLE.indexOf(state.activeMode);
+        state.activeMode = PERM_CYCLE[(idx + 1) % PERM_CYCLE.length];
+        syncModeUI();
+        syncLiveSessionConfig();
+        toast(`Permissões (Shift+Tab): ${el.modeTriggerLabel.textContent}`, 'ok');
+        return;
+      }
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'm') { e.preventDefault(); togglePopover('modelPopover'); return; }
+      if (k === 's') { e.preventDefault(); togglePopover('skillsPopover'); return; }
+      if (k === 'v') { e.preventDefault(); togglePopover('vialPopover'); return; }
+      if (k === 'p') { e.preventDefault(); state.prefs.viewMode = state.prefs.viewMode === 'studio' ? 'chat' : 'studio'; applyPrefs(); return; }
+      if (k === 'r') { e.preventDefault(); toggleVoiceDictation(); return; }
+      if (k === 'h') { e.preventDefault(); openHelpModal(); return; }
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       startFreshSession({ clearMessages: true });
       el.chatInput.focus();
     }
     if (e.key === 'Escape') {
+      if (voiceState.active) stopVoiceDictation({ keepText: true });
       closeAllPopovers();
       el.slashMenu.classList.add('hidden');
       el.appearanceModal.classList.add('hidden');
       el.newAgentModal.classList.add('hidden');
       el.accountsModal.classList.add('hidden');
+      el.helpModal?.classList.add('hidden');
     }
+  });
+
+  // `/btw` card & `/help` modal buttons
+  el.btwCopyBtn?.addEventListener('click', () => runCopyCommand('btw'));
+  el.btwCloseBtn?.addEventListener('click', () => {
+    el.btwCard.classList.add('hidden');
+    requestAnimationFrame(() => syncMascotsNow());
+  });
+  el.closeHelpBtn?.addEventListener('click', () => el.helpModal?.classList.add('hidden'));
+  el.helpModal?.addEventListener('click', (e) => { if (e.target === el.helpModal) el.helpModal.classList.add('hidden'); });
+
+  // Live Voice Dictation Controls
+  el.voiceMicBtn?.addEventListener('click', () => toggleVoiceDictation());
+  el.voiceStopBtn?.addEventListener('click', () => stopVoiceDictation({ keepText: true }));
+  el.voiceCancelBtn?.addEventListener('click', () => stopVoiceDictation({ keepText: false }));
+  el.voiceSendBtn?.addEventListener('click', () => {
+    stopVoiceDictation({ keepText: true });
+    setTimeout(() => sendMessage(), 60);
+  });
+  el.voiceLangBtn?.addEventListener('click', () => {
+    setVoiceLang(voiceState.lang === 'pt-BR' ? 'en-US' : 'pt-BR');
   });
 
   // System Prompt Editor
@@ -2973,6 +3355,220 @@ async function init() {
   } catch (err) {
     toast(`Falha ao inicializar: ${err.message}`, 'error');
   }
+}
+
+// ── Live Real-Time Voice Dictation (Web Speech API + Web Audio Equalizer) ────
+const voiceState = {
+  active: false,
+  lang: localStorage.getItem('obsidian_studio_voice_lang') || 'pt-BR',
+  recognition: null,
+  baseText: '',
+  finalText: '',
+  interimText: '',
+  startedAt: 0,
+  timerId: 0,
+  stream: null,
+  audioCtx: null,
+  analyser: null,
+  eqRaf: 0,
+};
+
+function setVoiceLang(raw) {
+  const clean = String(raw || '').toLowerCase().startsWith('en') ? 'en-US' : 'pt-BR';
+  voiceState.lang = clean;
+  try { localStorage.setItem('obsidian_studio_voice_lang', clean); } catch {}
+  if (el.voiceLangLabel) el.voiceLangLabel.textContent = clean;
+  if (el.voiceLangBtn) el.voiceLangBtn.textContent = clean;
+  if (voiceState.active) {
+    stopVoiceDictation({ keepText: true, silent: true });
+    setTimeout(() => startVoiceDictation(), 120);
+  }
+}
+
+function composeVoiceDraft() {
+  const joined = [voiceState.baseText, voiceState.finalText, voiceState.interimText]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean)
+    .join(' ');
+  setChatInputText(joined);
+  syncComposerActionButtons();
+  try {
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el.chatInput);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch {}
+  prism?.queueCaret({ typing: true });
+}
+
+async function startMicVisualizer() {
+  if (!navigator.mediaDevices?.getUserMedia || !el.voiceEqBars) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) { stream.getTracks().forEach((t) => t.stop()); return; }
+    const ctx = new AudioCtx();
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 64;
+    analyser.smoothingTimeConstant = 0.72;
+    src.connect(analyser);
+
+    voiceState.stream = stream;
+    voiceState.audioCtx = ctx;
+    voiceState.analyser = analyser;
+
+    const bars = Array.from(el.voiceEqBars.querySelectorAll('i'));
+    const bins = new Uint8Array(analyser.frequencyBinCount);
+    const step = () => {
+      if (!voiceState.active || !voiceState.analyser) return;
+      voiceState.analyser.getByteFrequencyData(bins);
+      bars.forEach((bar, idx) => {
+        const val = bins[Math.min(bins.length - 1, idx * 2 + 1)] || 0;
+        const h = Math.max(4, Math.round((val / 255) * 18));
+        bar.style.height = `${h}px`;
+      });
+      voiceState.eqRaf = requestAnimationFrame(step);
+    };
+    voiceState.eqRaf = requestAnimationFrame(step);
+  } catch {
+    // Visualizer is optional; SpeechRecognition continues independently
+  }
+}
+
+function stopMicVisualizer() {
+  if (voiceState.eqRaf) { cancelAnimationFrame(voiceState.eqRaf); voiceState.eqRaf = 0; }
+  if (voiceState.stream) {
+    try { voiceState.stream.getTracks().forEach((t) => t.stop()); } catch {}
+    voiceState.stream = null;
+  }
+  if (voiceState.audioCtx) {
+    try { voiceState.audioCtx.close(); } catch {}
+    voiceState.audioCtx = null;
+  }
+  voiceState.analyser = null;
+}
+
+function startVoiceDictation() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    toast('Seu navegador não suporta ditado ao vivo (use Chrome ou Edge).', 'error');
+    return;
+  }
+  if (voiceState.active) return;
+
+  voiceState.active = true;
+  voiceState.baseText = getChatInputText().trim();
+  voiceState.finalText = '';
+  voiceState.interimText = '';
+  voiceState.startedAt = Date.now();
+
+  if (el.voiceLangLabel) el.voiceLangLabel.textContent = voiceState.lang;
+  if (el.voiceLangBtn) el.voiceLangBtn.textContent = voiceState.lang;
+  if (el.voiceInterimLabel) el.voiceInterimLabel.textContent = 'Pode falar…';
+  if (el.voiceTimerLabel) el.voiceTimerLabel.textContent = '0:00';
+  el.voiceLiveBar?.classList.remove('hidden');
+  el.voiceMicBtn?.classList.add('recording');
+  el.voiceMicBtn?.setAttribute('aria-pressed', 'true');
+  prism?.notifyMascot('activity', {});
+
+  if (voiceState.timerId) clearInterval(voiceState.timerId);
+  voiceState.timerId = setInterval(() => {
+    const secs = Math.floor((Date.now() - voiceState.startedAt) / 1000);
+    const m = Math.floor(secs / 60);
+    const s = String(secs % 60).padStart(2, '0');
+    if (el.voiceTimerLabel) el.voiceTimerLabel.textContent = `${m}:${s}`;
+  }, 500);
+
+  const rec = new SR();
+  rec.lang = voiceState.lang;
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.maxAlternatives = 1;
+
+  rec.onresult = (event) => {
+    let finals = '';
+    let interims = '';
+    for (let i = 0; i < event.results.length; i++) {
+      const res = event.results[i];
+      const txt = res[0]?.transcript || '';
+      if (res.isFinal) finals += `${txt} `;
+      else interims += txt;
+    }
+    voiceState.finalText = finals.trim();
+    voiceState.interimText = interims.trim();
+    if (el.voiceInterimLabel) {
+      el.voiceInterimLabel.textContent = voiceState.interimText ? `“…${voiceState.interimText.slice(-46)}”` : 'Transcrevendo…';
+    }
+    composeVoiceDraft();
+  };
+
+  rec.onerror = (event) => {
+    const err = event?.error || 'unknown';
+    if (err === 'no-speech' || err === 'aborted') return;
+    if (err === 'not-allowed' || err === 'service-not-allowed') {
+      toast('Permissão de microfone negada no navegador.', 'error');
+      stopVoiceDictation({ keepText: true, silent: true });
+    } else if (err === 'audio-capture') {
+      toast('Nenhum microfone detectado neste PC.', 'error');
+      stopVoiceDictation({ keepText: true, silent: true });
+    } else {
+      toast(`Erro na transcrição de voz: ${err}`, 'warn');
+    }
+  };
+
+  rec.onend = () => {
+    if (voiceState.active) {
+      voiceState.baseText = [voiceState.baseText, voiceState.finalText].filter(Boolean).join(' ').trim();
+      voiceState.finalText = '';
+      voiceState.interimText = '';
+      try { rec.start(); } catch { stopVoiceDictation({ keepText: true, silent: true }); }
+    }
+  };
+
+  voiceState.recognition = rec;
+  try {
+    rec.start();
+    startMicVisualizer();
+    toast(`🎙️ Ditado ao vivo ligado (${voiceState.lang}) — fale normalmente!`, 'ok');
+  } catch (err) {
+    stopVoiceDictation({ keepText: true, silent: true });
+    toast(`Não foi possível iniciar o microfone: ${err.message}`, 'error');
+  }
+}
+
+function stopVoiceDictation({ keepText = true, silent = false } = {}) {
+  const wasActive = voiceState.active;
+  voiceState.active = false;
+  if (voiceState.timerId) { clearInterval(voiceState.timerId); voiceState.timerId = 0; }
+  if (voiceState.recognition) {
+    const rec = voiceState.recognition;
+    voiceState.recognition = null;
+    try { rec.onend = null; rec.stop(); } catch {}
+  }
+  stopMicVisualizer();
+
+  el.voiceLiveBar?.classList.add('hidden');
+  el.voiceMicBtn?.classList.remove('recording');
+  el.voiceMicBtn?.setAttribute('aria-pressed', 'false');
+
+  if (!keepText && wasActive) {
+    setChatInputText(voiceState.baseText);
+    syncComposerActionButtons();
+    if (!silent) toast('Gravação descartada.', 'ok');
+  } else if (wasActive) {
+    voiceState.interimText = '';
+    composeVoiceDraft();
+    el.chatInput.focus();
+    if (!silent) toast('Transcrição concluída.', 'ok');
+  }
+}
+
+function toggleVoiceDictation() {
+  if (voiceState.active) stopVoiceDictation({ keepText: true });
+  else startVoiceDictation();
 }
 
 init();

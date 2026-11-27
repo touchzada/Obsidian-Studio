@@ -1135,6 +1135,61 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { skill: { ...found, content } });
     }
 
+    // Ephemeral `/btw` side question on warm ACP server (never pollutes or interrupts main session!)
+    if (req.method === 'POST' && pathname === '/api/btw') {
+      const body = await readJsonBody(req, 512 * 1024);
+      const question = String(body.question || '').trim();
+      if (!question) return sendJson(res, 400, { error: 'Informe uma pergunta após /btw.' });
+      const cwd = body.cwd && fs.existsSync(body.cwd) ? body.cwd : DEFAULT_CWD;
+      const agentName = sanitizeAgentName(body.agentName || 'neon-agent') || 'neon-agent';
+      const resolvedAgent = resolveAgentPath(agentName);
+      const client = getOrCreateAcpClient(agentName, resolvedAgent?.format || 'dir', cwd);
+      const startedAt = Date.now();
+      let tempSessId = null;
+      try {
+        const sRes = await client.newSession({
+          cwd,
+          systemPromptAppend:
+            'Side-question mode (/btw): answer concisely and directly in the user language. Do not modify files or run destructive commands.',
+        });
+        tempSessId = sRes?.sessionId;
+        if (!tempSessId) throw new Error('ACP não abriu sessão temporária para /btw.');
+        if (body.model) {
+          try { await client.setModel(tempSessId, String(body.model)); } catch {}
+        }
+        try { await client.setMode(tempSessId, 'plan'); } catch {}
+
+        let answer = '';
+        client.registerSession(tempSessId, {
+          onUpdate: (upd) => {
+            if (upd?.sessionUpdate === 'agent_message_chunk' && upd.content?.type === 'text') {
+              answer += String(upd.content.text || '');
+            }
+          },
+          onPermissionRequest: (rpcId, params) => {
+            const opts = Array.isArray(params?.options) ? params.options : [];
+            const reject = opts.find((o) => String(o.kind || '').startsWith('reject'));
+            if (reject) client.replyResult(rpcId, { outcome: { outcome: 'selected', optionId: reject.optionId } });
+            else client.replyResult(rpcId, { outcome: { outcome: 'cancelled' } });
+          },
+        });
+
+        const ctxSnippet = String(body.context || '').trim().slice(-8000);
+        const promptText = ctxSnippet
+          ? `[Resumo recente do chat principal para contexto]\n${ctxSnippet}\n\n[Pergunta paralela /btw]\n${question}`
+          : question;
+        await client.prompt(tempSessId, [{ type: 'text', text: promptText }]);
+        return sendJson(res, 200, {
+          answer: answer.trim() || '(Sem resposta)',
+          durationSec: Number(((Date.now() - startedAt) / 1000).toFixed(1)),
+        });
+      } finally {
+        if (tempSessId) {
+          try { await client.closeSession(tempSessId); } catch {}
+        }
+      }
+    }
+
     // List native Antigravity ACP sessions
     if (req.method === 'GET' && pathname === '/api/acp/sessions') {
       const cwd = urlObj.searchParams.get('cwd') || DEFAULT_CWD;
