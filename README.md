@@ -25,7 +25,8 @@
   - **Cancelamento instantâneo (`session/cancel`)** no botão Stop e no Enviar Direto (*Steer*), mantendo o servidor ACP aquecido.
   - **Pensamento real expansível (`agent_thought_chunk`)**, **plano de execução ao vivo (`plan`)**, **diffs estruturados** em tool cards e **envio nativo de imagens multimodais** (`{ type: "image" }`).
   - **Modo interativo "Perguntar antes" (`session/request_permission`)** com cards de aprovação direto no chat (`Permitir`, `Permitir sempre`, `Negar`), além de `Completo`, `Editar arquivos` e `Somente leitura`.
-  - **Slash Commands reais do Antigravity** (`available_commands_update`) mesclados automaticamente no menu `/`, mais **uso de janela de contexto ao vivo (`usage_update`)** no tubo físico de água (512K / 1M dinâmico).
+  - **⚡ Seletor de Skills instaladas (`⚡ Skills`) + Slash Commands reais:** descobre automaticamente todas as skills instaladas em `~/.gemini/config/skills/`, `~/.gemini/antigravity/builtin/skills/`, skills do workspace (`.agents/skills/` / `.gemini/skills/`) e plugins ACP — permite fixar skills direto na sessão ACP (via `systemPrompt.append` nativo, sem reiniciar) ou invocar com 1 clique pelo menu `/`.
+  - **Uso de janela de contexto ao vivo (`usage_update`)** no tubo físico de água (512K / 1M dinâmico).
 - **⇶ Mensagens na fila + Enviar direto (*Queued Messages & Steer*)**
   - Continue digitando enquanto o agente trabalha:
     - **`Enter`** (ou `＋ Fila`): adiciona a mensagem na fila acima do composer e envia automaticamente assim que o turno atual termina.

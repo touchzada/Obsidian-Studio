@@ -153,6 +153,12 @@ const state = {
   activeCwd: '',
   activeMode: 'full',
   contextSize: MAX_CONTEXT_TOKENS,
+  skills: [],
+  skillsFilter: 'all',
+  pinnedSkillsByAgent: (() => {
+    try { return JSON.parse(localStorage.getItem('obsidian_studio_pinned_skills_v1') || '{}') || {}; }
+    catch { return {}; }
+  })(),
   acpCommands: [],
   acpTier: null,
   lastUsage: null,
@@ -283,6 +289,15 @@ const el = {
   modeTriggerDot: document.getElementById('modeTriggerDot'),
   modeTriggerLabel: document.getElementById('modeTriggerLabel'),
   modePopover: document.getElementById('modePopover'),
+  skillsTriggerBtn: document.getElementById('skillsTriggerBtn'),
+  skillsCountBadge: document.getElementById('skillsCountBadge'),
+  skillsPopover: document.getElementById('skillsPopover'),
+  skillsTotalBadge: document.getElementById('skillsTotalBadge'),
+  skillsSearchInput: document.getElementById('skillsSearchInput'),
+  skillsFilterPills: document.getElementById('skillsFilterPills'),
+  skillsPopoverList: document.getElementById('skillsPopoverList'),
+  clearPinnedSkillsBtn: document.getElementById('clearPinnedSkillsBtn'),
+  activeSkillsStrip: document.getElementById('activeSkillsStrip'),
   telemetryTrigger: document.getElementById('telemetryTrigger'),
   liveTpsLabel: document.getElementById('liveTpsLabel'),
   liveCacheLabel: document.getElementById('liveCacheLabel'),
@@ -535,11 +550,136 @@ async function syncLiveSessionConfig() {
   try {
     await api(`/api/sessions/${encodeURIComponent(state.sessionId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ model: state.activeModel, permissionMode: state.activeMode }),
+      body: JSON.stringify({
+        model: state.activeModel,
+        permissionMode: state.activeMode,
+        enabledSkills: getPinnedSkills(),
+      }),
     });
   } catch {
-    // Session will pick up updated model/mode on next turn if not yet created
+    // Session will pick up updated model/mode/skills on next turn if not yet created
   }
+}
+
+function getPinnedSkills(slug = state.currentSlug) {
+  const key = slug || 'neon-agent';
+  const arr = state.pinnedSkillsByAgent[key];
+  return Array.isArray(arr) ? arr : [];
+}
+
+function savePinnedSkills(nextList, slug = state.currentSlug) {
+  const key = slug || 'neon-agent';
+  state.pinnedSkillsByAgent[key] = Array.from(new Set(nextList)).slice(0, 12);
+  try {
+    localStorage.setItem('obsidian_studio_pinned_skills_v1', JSON.stringify(state.pinnedSkillsByAgent));
+  } catch {}
+  renderActiveSkillsStrip();
+  renderSkillsPopover();
+  syncLiveSessionConfig();
+}
+
+function togglePinSkill(skillName) {
+  const cur = getPinnedSkills();
+  const exists = cur.includes(skillName);
+  const next = exists ? cur.filter((s) => s !== skillName) : [...cur, skillName];
+  savePinnedSkills(next);
+  toast(exists ? `Skill removida: ${skillName}` : `Skill fixada na sessão ACP: ${skillName}`, 'ok');
+}
+
+function renderActiveSkillsStrip() {
+  const pinned = getPinnedSkills();
+  if (el.skillsCountBadge) {
+    el.skillsCountBadge.textContent = String(pinned.length);
+    el.skillsCountBadge.classList.toggle('hidden', pinned.length === 0);
+  }
+  if (el.clearPinnedSkillsBtn) {
+    el.clearPinnedSkillsBtn.classList.toggle('hidden', pinned.length === 0);
+  }
+  if (!el.activeSkillsStrip) return;
+  el.activeSkillsStrip.classList.toggle('hidden', pinned.length === 0);
+  el.activeSkillsStrip.innerHTML = pinned
+    .map(
+      (name) => `
+      <span class="active-skill-chip mono">
+        <span>⚡ ${escapeHtml(name)}</span>
+        <button type="button" data-unpin-skill="${escapeHtml(name)}" title="Remover skill da sessão">✕</button>
+      </span>`
+    )
+    .join('');
+  el.activeSkillsStrip.querySelectorAll('[data-unpin-skill]').forEach((btn) => {
+    btn.addEventListener('click', () => togglePinSkill(btn.dataset.unpinSkill));
+  });
+}
+
+async function loadInstalledSkills() {
+  try {
+    const q = state.activeCwd ? `?cwd=${encodeURIComponent(state.activeCwd)}` : '';
+    const data = await api(`/api/skills${q}`);
+    state.skills = data.skills || [];
+    if (el.skillsTotalBadge) el.skillsTotalBadge.textContent = `${state.skills.length} skills`;
+    renderActiveSkillsStrip();
+    if (!el.skillsPopover?.classList.contains('hidden')) renderSkillsPopover();
+  } catch {}
+}
+
+function renderSkillsPopover() {
+  if (!el.skillsPopoverList) return;
+  const q = (el.skillsSearchInput?.value || '').trim().toLowerCase();
+  const pinned = new Set(getPinnedSkills());
+  const filter = state.skillsFilter || 'all';
+  const sourceLabel = { user: 'minha', workspace: 'workspace', plugin: 'plugin', builtin: 'builtin' };
+
+  const filtered = (state.skills || []).filter((s) => {
+    if (filter === 'pinned' && !pinned.has(s.name)) return false;
+    if (filter !== 'all' && filter !== 'pinned' && s.source !== filter) return false;
+    if (q && !s.name.toLowerCase().includes(q) && !String(s.description || '').toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  if (el.skillsTotalBadge) el.skillsTotalBadge.textContent = `${filtered.length} / ${state.skills.length}`;
+  if (!filtered.length) {
+    el.skillsPopoverList.innerHTML = '<div class="conv-empty">Nenhuma skill encontrada.</div>';
+    return;
+  }
+
+  el.skillsPopoverList.innerHTML = filtered
+    .map((s) => {
+      const isPinned = pinned.has(s.name);
+      return `
+        <div class="skill-row ${isPinned ? 'pinned' : ''}" data-skill-row="${escapeHtml(s.name)}">
+          <button type="button" class="skill-main-btn" data-toggle-skill="${escapeHtml(s.name)}" title="${isPinned ? 'Desafixar da sessão' : 'Fixar skill na sessão ACP'}">
+            <span class="skill-check">${isPinned ? '✓' : ''}</span>
+            <span class="skill-meta">
+              <span class="skill-title-line">
+                <strong class="mono">${escapeHtml(s.name)}</strong>
+                <span class="skill-src-tag mono src-${escapeHtml(s.source)}">${escapeHtml(sourceLabel[s.source] || s.source)}</span>
+              </span>
+              <small>${escapeHtml(s.description || s.filePath || 'Skill do Antigravity')}</small>
+            </span>
+          </button>
+          <button type="button" class="skill-invoke-btn mono" data-invoke-skill="${escapeHtml(s.name)}" title="Inserir /${escapeHtml(s.name)} no chat">/ Usar</button>
+        </div>`;
+    })
+    .join('');
+
+  el.skillsPopoverList.querySelectorAll('[data-toggle-skill]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePinSkill(btn.dataset.toggleSkill);
+    });
+  });
+  el.skillsPopoverList.querySelectorAll('[data-invoke-skill]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = btn.dataset.invokeSkill;
+      closeAllPopovers();
+      const cur = getChatInputText().trim();
+      setChatInputText(cur ? `/${name} ${cur}` : `/${name} `);
+      el.chatInput.focus();
+      syncComposerActionButtons();
+      prism?.queueCaret({ typing: false, refreshMetrics: true });
+    });
+  });
 }
 
 async function selectModelFamily(familyId) {
@@ -578,7 +718,7 @@ async function selectEffort(effort, notify = false) {
 }
 
 // ── Popover Orchestration (With Real Motion Engine Spring!) ───────────────────
-const ALL_POPOVERS = ['modelPopover', 'modePopover', 'vialPopover', 'agentPopover', 'templatePopover', 'historyPopover'];
+const ALL_POPOVERS = ['modelPopover', 'modePopover', 'skillsPopover', 'vialPopover', 'agentPopover', 'templatePopover', 'historyPopover'];
 
 function closeAllPopovers(exceptKey = null) {
   for (const key of ALL_POPOVERS) {
@@ -587,6 +727,7 @@ function closeAllPopovers(exceptKey = null) {
   }
   el.modelTriggerBtn.classList.toggle('open', exceptKey === 'modelPopover');
   el.modeTriggerBtn.classList.toggle('open', exceptKey === 'modePopover');
+  el.skillsTriggerBtn?.classList.toggle('open', exceptKey === 'skillsPopover');
   el.telemetryTrigger.classList.toggle('open', exceptKey === 'vialPopover');
   document.documentElement.toggleAttribute('data-ag-cs-model-menu', exceptKey === 'modelPopover');
   document.documentElement.toggleAttribute('data-ag-pp-open', exceptKey === 'vialPopover');
@@ -626,6 +767,10 @@ function togglePopover(key) {
     updateOpticsReadout();
     prism?.getVial()?.impulse?.(1.55);
     prism?.getVial()?.tilt?.(0.18);
+  } else if (key === 'skillsPopover') {
+    if (el.skillsSearchInput) el.skillsSearchInput.value = '';
+    renderSkillsPopover();
+    setTimeout(() => el.skillsSearchInput?.focus(), 20);
   } else if (key === 'agentPopover') {
     el.agentSearchInput.value = '';
     renderAgentPopover();
@@ -1573,6 +1718,7 @@ async function selectAgent(slug, resetChat = true) {
   el.deleteAgentBtn.classList.toggle('hidden', slug === 'neon-agent');
 
   renderToolToggles(data.agent.tools);
+  renderActiveSkillsStrip();
   updateEditorStats();
   setDirty(false);
 
@@ -1759,6 +1905,7 @@ async function ensureSession() {
       model: state.activeModel,
       cwd,
       permissionMode: state.activeMode,
+      enabledSkills: getPinnedSkills(),
       resumeConversationId: state.agyConversationId || undefined,
     }),
   });
@@ -1956,11 +2103,20 @@ function updateSlashMenu() {
   const val = getChatInputText();
   if (!val.startsWith('/') || val.includes('\n')) { el.slashMenu.classList.add('hidden'); return; }
   const q = val.toLowerCase();
+  const skillCmds = (state.skills || []).map((s) => ({
+    cmd: `/${s.name}`,
+    desc: String(s.description || `Skill (${s.source})`).slice(0, 68),
+    isAcp: true,
+  }));
   const acpCmds = (state.acpCommands || [])
     .filter((c) => c && c.name)
     .map((c) => ({ cmd: `/${c.name}`, desc: String(c.description || '').slice(0, 68), isAcp: true }));
-  const all = [...SLASH_COMMANDS, ...acpCmds.filter((a) => !SLASH_COMMANDS.some((s) => s.cmd === a.cmd))];
-  const matches = all.filter((c) => c.cmd.toLowerCase().startsWith(q)).slice(0, 14);
+  const mergedMap = new Map();
+  for (const item of [...SLASH_COMMANDS, ...skillCmds, ...acpCmds]) {
+    const k = item.cmd.toLowerCase();
+    if (!mergedMap.has(k)) mergedMap.set(k, item);
+  }
+  const matches = Array.from(mergedMap.values()).filter((c) => c.cmd.toLowerCase().startsWith(q)).slice(0, 16);
   if (!matches.length) { el.slashMenu.classList.add('hidden'); return; }
   state.slashIndex = Math.min(state.slashIndex, matches.length - 1);
   el.slashMenu.innerHTML = matches
@@ -2347,6 +2503,21 @@ function bindEvents() {
   el.historyTriggerBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePopover('historyPopover'); });
   el.modelTriggerBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePopover('modelPopover'); });
   el.modeTriggerBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePopover('modePopover'); });
+  el.skillsTriggerBtn?.addEventListener('click', (e) => { e.stopPropagation(); togglePopover('skillsPopover'); });
+  el.skillsSearchInput?.addEventListener('input', () => renderSkillsPopover());
+  el.skillsFilterPills?.querySelectorAll('[data-sk-filter]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.skillsFilter = btn.dataset.skFilter;
+      el.skillsFilterPills.querySelectorAll('[data-sk-filter]').forEach((b) => b.classList.toggle('active', b === btn));
+      renderSkillsPopover();
+    });
+  });
+  el.clearPinnedSkillsBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    savePinnedSkills([]);
+    toast('Skills fixadas limpas.', 'ok');
+  });
   el.telemetryTrigger.addEventListener('click', (e) => { e.stopPropagation(); togglePopover('vialPopover'); });
 
   // Protect modelPopover from closing when finishing a slider drag outside its bounds
@@ -2362,7 +2533,7 @@ function bindEvents() {
   document.addEventListener('click', (e) => {
     if (Date.now() < sliderDragGuardUntil) return;
     const inside = ALL_POPOVERS.some((k) => el[k]?.contains(e.target));
-    const onTrigger = [el.agentTriggerBtn, el.templateTriggerBtn, el.historyTriggerBtn, el.modelTriggerBtn, el.modeTriggerBtn, el.telemetryTrigger].some((b) => b?.contains(e.target));
+    const onTrigger = [el.agentTriggerBtn, el.templateTriggerBtn, el.historyTriggerBtn, el.modelTriggerBtn, el.modeTriggerBtn, el.skillsTriggerBtn, el.telemetryTrigger].some((b) => b?.contains(e.target));
     if (!inside && !onTrigger) closeAllPopovers();
   });
 
@@ -2453,6 +2624,7 @@ function bindEvents() {
   el.agentDescInput.addEventListener('input', () => setDirty(true));
   el.cwdInput.addEventListener('change', async () => {
     state.activeCwd = el.cwdInput.value.trim() || state.meta.defaultCwd;
+    loadInstalledSkills();
     await startFreshSession({ clearMessages: false });
     toast('Pasta de trabalho atualizada!', 'ok');
   });
@@ -2794,6 +2966,7 @@ async function init() {
 
     syncModelUI();
     renderConversationsList();
+    loadInstalledSkills();
     const initial = state.agents.find((a) => a.slug === 'neon-agent') || state.agents[0];
     if (initial) await selectAgent(initial.slug, true);
     prism.triggerTide();

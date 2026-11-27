@@ -2504,3 +2504,113 @@ html[data-theme="light"] .ag-cs-orch-track {
   border-color: rgba(248, 113, 113, 0.38);
 }
 .perm-deny:hover { background: rgba(248, 113, 113, 0.26); }
+
+/* ── Installed Antigravity Skills Popover & Pinned Chips ── */
+.skills-count-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  font-size: 10px; font-weight: 700;
+  background: rgba(139, 92, 246, 0.28); color: #ddd6fe;
+  border: 1px solid rgba(139, 92, 246, 0.5);
+}
+.skills-count-pill.hidden { display: none !important; }
+
+.active-skills-strip {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 8px 14px 2px;
+}
+.active-skills-strip.hidden { display: none !important; }
+.active-skill-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px; font-size: 11px;
+  background: rgba(139, 92, 246, 0.14);
+  border: 1px solid rgba(139, 92, 246, 0.36);
+  color: #ddd6fe;
+}
+.active-skill-chip button {
+  border: none; background: transparent; color: inherit;
+  cursor: pointer; font-size: 10.5px; opacity: 0.7; padding: 0 2px;
+}
+.active-skill-chip button:hover { opacity: 1; color: #f87171; }
+
+.skills-popover {
+  left: 200px;
+  bottom: calc(100% + 12px);
+  width: 410px;
+  max-width: calc(100vw - 32px);
+  transform-origin: bottom left;
+}
+.skills-pop-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px 8px;
+  font-size: 12.5px; font-weight: 600; color: var(--foreground);
+  border-bottom: 1px solid var(--border);
+}
+.skills-filter-row {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.sk-filter {
+  border: 1px solid transparent; background: transparent;
+  color: var(--muted-foreground); font-family: inherit; font-size: 11px;
+  font-weight: 550; padding: 3px 8px; border-radius: 999px; cursor: pointer;
+  transition: all 130ms ease;
+}
+.sk-filter:hover { color: var(--foreground); background: var(--ag-cs-hover); }
+.sk-filter.active {
+  color: var(--foreground); background: rgba(139, 92, 246, 0.2);
+  border-color: rgba(139, 92, 246, 0.45);
+}
+.skills-list { max-height: 290px; }
+.skill-row {
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 5px; border-radius: 9px;
+  border: 1px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.skill-row:hover { background: var(--ag-cs-hover); }
+.skill-row.pinned {
+  background: rgba(139, 92, 246, 0.11);
+  border-color: rgba(139, 92, 246, 0.34);
+}
+.skill-main-btn {
+  flex: 1; min-width: 0; border: none; background: transparent;
+  display: flex; align-items: flex-start; gap: 8px;
+  text-align: left; cursor: pointer; padding: 4px; color: inherit; font-family: inherit;
+}
+.skill-check {
+  flex: 0 0 16px; height: 16px; margin-top: 2px; border-radius: 5px;
+  border: 1px solid var(--border); display: grid; place-items: center;
+  font-size: 10px; font-weight: 700; color: #fff;
+}
+.skill-row.pinned .skill-check {
+  background: #8b5cf6; border-color: #a78bfa;
+}
+.skill-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.skill-title-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.skill-title-line strong { font-size: 12px; color: var(--foreground); }
+.skill-meta small {
+  font-size: 11px; color: var(--muted-foreground);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.skill-src-tag {
+  font-size: 9.5px; padding: 1px 5px; border-radius: 5px;
+  background: var(--elevated); color: var(--muted-foreground);
+  border: 1px solid var(--border);
+}
+.skill-src-tag.src-user { color: #93c5fd; border-color: rgba(96, 165, 250, 0.32); }
+.skill-src-tag.src-workspace { color: #86efac; border-color: rgba(74, 222, 128, 0.32); }
+.skill-src-tag.src-plugin { color: #f9a8d4; border-color: rgba(244, 114, 182, 0.32); }
+.skill-invoke-btn {
+  flex-shrink: 0; height: 24px; padding: 0 8px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--elevated);
+  color: var(--secondary-foreground); font-size: 10.5px; font-weight: 600;
+  cursor: pointer; transition: all 130ms ease;
+}
+.skill-invoke-btn:hover { color: #fff; border-color: rgba(139, 92, 246, 0.55); background: rgba(139, 92, 246, 0.25); }
+.skills-pop-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; border-top: 1px solid var(--border);
+}

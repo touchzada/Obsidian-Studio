@@ -11,6 +11,8 @@ const { AcpClient } = require('./acp-client');
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT) || 4321;
 const AGENTS_DIR = path.join(os.homedir(), '.gemini', 'config', 'agents');
+const USER_SKILLS_DIR = path.join(os.homedir(), '.gemini', 'config', 'skills');
+const BUILTIN_SKILLS_DIR = path.join(os.homedir(), '.gemini', 'antigravity', 'builtin', 'skills');
 const PRISM_PLUGIN_DIR = path.join(os.homedir(), '.gemini', 'config', 'plugins', 'obsidian-prism');
 const PRISM_VENDOR_WHITELIST = new Map([
   ['motion-engine.js', path.join(PRISM_PLUGIN_DIR, 'motion-engine.js')],
@@ -434,6 +436,120 @@ function listAgents() {
   return results;
 }
 
+function parseSkillFile(filePath, folderName, source) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n');
+    const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+    let name = folderName;
+    let description = '';
+    let body = raw;
+    if (match) {
+      body = match[2].trim();
+      for (const line of match[1].split('\n')) {
+        const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+        if (!kv) continue;
+        const k = kv[1].toLowerCase();
+        const v = String(parseYamlScalar(kv[2]) ?? '').trim();
+        if (k === 'name' && v) name = v;
+        if (k === 'description' && v) description = v;
+      }
+    }
+    return {
+      slug: folderName,
+      name,
+      description,
+      source,
+      filePath,
+      bodyLength: body.length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function scanSkillsDir(dirPath, source, seenMap) {
+  if (!dirPath || !fs.existsSync(dirPath)) return;
+  let entries;
+  try { entries = fs.readdirSync(dirPath, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillMd = path.join(dirPath, entry.name, 'SKILL.md');
+    if (!fs.existsSync(skillMd)) continue;
+    const parsed = parseSkillFile(skillMd, entry.name, source);
+    if (!parsed) continue;
+    const key = parsed.name.toLowerCase();
+    if (!seenMap.has(key)) seenMap.set(key, parsed);
+  }
+}
+
+function listInstalledSkills(cwd = DEFAULT_CWD) {
+  const seen = new Map();
+  if (cwd && fs.existsSync(cwd)) {
+    scanSkillsDir(path.join(cwd, '.agents', 'skills'), 'workspace', seen);
+    scanSkillsDir(path.join(cwd, '.gemini', 'skills'), 'workspace', seen);
+  }
+  scanSkillsDir(USER_SKILLS_DIR, 'user', seen);
+  scanSkillsDir(BUILTIN_SKILLS_DIR, 'builtin', seen);
+
+  // Merge any plugin/ACP commands not on disk as plugin skills
+  for (const cmd of cachedAcpMeta.availableCommands || []) {
+    if (!cmd || !cmd.name) continue;
+    const key = String(cmd.name).trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.set(key, {
+      slug: cmd.name,
+      name: cmd.name,
+      description: String(cmd.description || '').trim(),
+      source: 'plugin',
+      filePath: null,
+      bodyLength: 0,
+    });
+  }
+
+  const order = { workspace: 0, user: 1, plugin: 2, builtin: 3 };
+  return Array.from(seen.values()).sort((a, b) => {
+    const oa = order[a.source] ?? 9;
+    const ob = order[b.source] ?? 9;
+    if (oa !== ob) return oa - ob;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function buildSkillsPromptBlock(skillNames, cwd, maxTotalChars = 24000) {
+  if (!Array.isArray(skillNames) || skillNames.length === 0) return '';
+  const all = listInstalledSkills(cwd);
+  const byKey = new Map();
+  for (const s of all) {
+    byKey.set(s.slug.toLowerCase(), s);
+    byKey.set(s.name.toLowerCase(), s);
+  }
+  const chunks = [];
+  let total = 0;
+  for (const rawName of skillNames) {
+    const sk = byKey.get(String(rawName || '').trim().toLowerCase());
+    if (!sk) continue;
+    if (sk.filePath && fs.existsSync(sk.filePath)) {
+      let body = '';
+      try {
+        const full = fs.readFileSync(sk.filePath, 'utf8').replace(/\r\n/g, '\n');
+        body = full.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+      } catch {}
+      const remaining = Math.max(800, maxTotalChars - total);
+      const clipped = body.length > remaining
+        ? `${body.slice(0, remaining)}\n...[Skill truncada; leia o arquivo completo em ${sk.filePath} se precisar]`
+        : body;
+      const block = `<active_skill name="${sk.name}" path="${sk.filePath}">\n${clipped}\n</active_skill>`;
+      chunks.push(block);
+      total += block.length;
+      if (total >= maxTotalChars) break;
+    } else {
+      chunks.push(`<active_skill name="${sk.name}">${sk.description || ''}</active_skill>`);
+    }
+  }
+  if (!chunks.length) return '';
+  return `[SKILLS ATIVAS SELECIONADAS PELO USUÁRIO]\nSiga as instruções das skills abaixo durante esta conversa:\n\n${chunks.join('\n\n')}`;
+}
+
 function loadHistory() {
   return readJsonFile(HISTORY_FILE, {});
 }
@@ -651,15 +767,23 @@ async function ensureAcpSession(session) {
     return { client, acpSessionId: session.acpSessionId, reused: true };
   }
 
-  let systemPromptAppend = '';
+  const appendParts = [];
   if (session.agentFormat === 'flat' && session.agentFilePath) {
     try {
       const parsed = parseAgentMarkdown(fs.readFileSync(session.agentFilePath, 'utf8'), session.agentName);
       if (parsed.systemPrompt && parsed.systemPrompt.trim()) {
-        systemPromptAppend = `[ACTIVE AGENT ROLE: ${session.agentName}]\n${parsed.systemPrompt.trim()}`;
+        appendParts.push(`[ACTIVE AGENT ROLE: ${session.agentName}]\n${parsed.systemPrompt.trim()}`);
       }
     } catch {}
   }
+  if (Array.isArray(session.enabledSkills) && session.enabledSkills.length > 0) {
+    const skBlock = buildSkillsPromptBlock(session.enabledSkills, session.cwd);
+    if (skBlock) {
+      appendParts.push(skBlock);
+      session.injectedSkills = new Set(session.enabledSkills);
+    }
+  }
+  const systemPromptAppend = appendParts.join('\n\n');
 
   let sessRes = null;
   let resumed = false;
@@ -989,6 +1113,26 @@ const server = http.createServer(async (req, res) => {
           tier: cachedAcpMeta.tier,
         },
       });
+    }
+
+    // List installed skills (user + workspace + builtin + ACP plugin skills)
+    if (req.method === 'GET' && pathname === '/api/skills') {
+      const cwd = urlObj.searchParams.get('cwd') || DEFAULT_CWD;
+      return sendJson(res, 200, { skills: listInstalledSkills(cwd) });
+    }
+
+    const skillDetailMatch = pathname.match(/^\/api\/skills\/([^/]+)$/);
+    if (req.method === 'GET' && skillDetailMatch) {
+      const target = decodeURIComponent(skillDetailMatch[1]).toLowerCase();
+      const cwd = urlObj.searchParams.get('cwd') || DEFAULT_CWD;
+      const found = listInstalledSkills(cwd).find(
+        (s) => s.slug.toLowerCase() === target || s.name.toLowerCase() === target
+      );
+      if (!found) return sendJson(res, 404, { error: 'Skill não encontrada.' });
+      const content = found.filePath && fs.existsSync(found.filePath)
+        ? fs.readFileSync(found.filePath, 'utf8')
+        : found.description || '';
+      return sendJson(res, 200, { skill: { ...found, content } });
     }
 
     // List native Antigravity ACP sessions
@@ -1355,6 +1499,10 @@ const server = http.createServer(async (req, res) => {
             : null,
         acpClient: null,
         acpSessionId: null,
+        enabledSkills: Array.isArray(body.enabledSkills)
+          ? Array.from(new Set(body.enabledSkills.map((s) => String(s || '').trim()).filter(Boolean))).slice(0, 12)
+          : [],
+        injectedSkills: new Set(),
         pendingPermissions: new Map(),
         contextUsed: 0,
         contextSize: 512000,
@@ -1402,11 +1550,17 @@ const server = http.createServer(async (req, res) => {
           } catch {}
         }
       }
+      if (Array.isArray(body.enabledSkills)) {
+        session.enabledSkills = Array.from(
+          new Set(body.enabledSkills.map((s) => String(s || '').trim()).filter(Boolean))
+        ).slice(0, 12);
+      }
       return sendJson(res, 200, {
         session: {
           id: session.id,
           model: session.model,
           permissionMode: session.permissionMode,
+          enabledSkills: session.enabledSkills,
           liveUpdated: Boolean(session.acpSessionId),
         },
       });
@@ -1482,9 +1636,23 @@ const server = http.createServer(async (req, res) => {
           commands: client.availableCommands || cachedAcpMeta.availableCommands || [],
         });
 
+        // If user pinned new skills mid-session (after session/new already ran), inject them cleanly once
+        let turnText = content;
+        if (Array.isArray(session.enabledSkills) && session.enabledSkills.length > 0) {
+          const newlyPinned = session.enabledSkills.filter((sk) => !session.injectedSkills?.has(sk));
+          if (newlyPinned.length > 0) {
+            const skBlock = buildSkillsPromptBlock(newlyPinned, session.cwd, 16000);
+            if (skBlock) {
+              turnText = `${skBlock}\n\n[MENSAGEM DO USUÁRIO]\n${turnText}`;
+              if (!session.injectedSkills) session.injectedSkills = new Set();
+              newlyPinned.forEach((sk) => session.injectedSkills.add(sk));
+            }
+          }
+        }
+
         // Build ACP multimodal prompt blocks (text + native base64 images!)
         const promptBlocks = [];
-        if (content) promptBlocks.push({ type: 'text', text: content });
+        if (turnText) promptBlocks.push({ type: 'text', text: turnText });
         for (const img of images.slice(0, 6)) {
           if (!img || typeof img.path !== 'string') continue;
           const resolvedImg = path.resolve(img.path);

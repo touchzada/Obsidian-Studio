@@ -341,6 +341,30 @@
                 </div>
               </div>
 
+              <!-- Custom Skills Popover (Browse, Search, Pin & Invoke Installed Antigravity Skills!) -->
+              <div class="glass-popover skills-popover hidden" id="skillsPopover">
+                <div class="skills-pop-head">
+                  <span>⚡ Skills instaladas</span>
+                  <span class="mono" style="font-size:10.5px; color:var(--muted-foreground);" id="skillsTotalBadge">0 skills</span>
+                </div>
+                <div class="popover-search-wrap">
+                  <input type="search" id="skillsSearchInput" class="search-input" placeholder="Buscar skill por nome ou função…" />
+                </div>
+                <div class="skills-filter-row" id="skillsFilterPills">
+                  <button type="button" class="sk-filter active" data-sk-filter="all">Todas</button>
+                  <button type="button" class="sk-filter" data-sk-filter="pinned">Ativas</button>
+                  <button type="button" class="sk-filter" data-sk-filter="user">Minhas</button>
+                  <button type="button" class="sk-filter" data-sk-filter="workspace">Workspace</button>
+                  <button type="button" class="sk-filter" data-sk-filter="plugin">Plugins</button>
+                  <button type="button" class="sk-filter" data-sk-filter="builtin">Builtin</button>
+                </div>
+                <div class="popover-list skills-list" id="skillsPopoverList"></div>
+                <div class="skills-pop-foot">
+                  <span style="font-size:11px; color:var(--muted-foreground);">Fixe para injetar na sessão ACP ou clique em <span class="mono">/</span></span>
+                  <button type="button" class="opt-btn opt-btn-xs hidden" id="clearPinnedSkillsBtn">Limpar</button>
+                </div>
+              </div>
+
               <!-- Queued Messages Card (Obsidian Prism style — sits right above composer; pets leap onto it!) -->
               <div class="queued-messages-card hidden" id="queuedMessagesCard">
                 <div class="queued-head" id="queuedHead">
@@ -361,6 +385,7 @@
                 <!-- REAL Obsidian Prism Dual / Quad Mascot Stage (Whale + Dragon + Clawd + Cat) -->
                 <div class="ag-cs-crab ag-cs-dual-stage" id="mascotStage" data-mascot-stage="true" aria-hidden="true"></div>
 
+                <div class="active-skills-strip hidden" id="activeSkillsStrip"></div>
                 <div class="pending-attachments hidden" id="pendingAttachments"></div>
 
                 <!-- Contenteditable Composer Host for REAL Obsidian Prism Smooth Gliding Caret -->
@@ -394,6 +419,14 @@
                     <button type="button" class="composer-pill" id="modeTriggerBtn" title="Modo de permissões do agente">
                       <span class="mode-dot" id="modeTriggerDot" style="background:var(--success);"></span>
                       <span id="modeTriggerLabel">Completo</span>
+                      <span class="chevron">▾</span>
+                    </button>
+
+                    <!-- Installed Antigravity Skills Trigger Pill -->
+                    <button type="button" class="composer-pill" id="skillsTriggerBtn" title="Ativar ou chamar skills instaladas do Antigravity">
+                      <span style="color:#c4b5fd;">⚡</span>
+                      <span>Skills</span>
+                      <span class="skills-count-pill mono hidden" id="skillsCountBadge">0</span>
                       <span class="chevron">▾</span>
                     </button>
                   </div>
